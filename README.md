@@ -2,7 +2,7 @@
   <img src="res/macos_icon.png" width="220" alt="Red Two macOS Icon">
 </p>
 
-# Red Two (macOS Apple Silicon / Metal Port)
+# Red Two (for macOS)
 
 A native **macOS (Apple Silicon / Metal)** port of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), forked from [gminustwo/red_two](https://github.com/gminustwo/red_two) with additional quality-of-life enhancements.
 
@@ -22,7 +22,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 ## Features & macOS Enhancements
 
 - **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, including Aurora shader logic-op fallback (`patches/aurora/0034-logic-op-fallback.patch`).
-- **Standalone macOS `.app` bundle** with bundled dylibs, custom icon, and macOS Fullscreen Spaces support.
+- **Standalone macOS `.app` bundle** with bundled dylibs, custom icon, and macOS Game Mode support.
 - **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and pause function.
 - **Audio Commentary Controls**: press **L3** or **C** to pause/resume active commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
 - **Art Gallery Captions**: bottom-center title and slide counter overlay for all 27 concept art pieces and renders.
@@ -30,7 +30,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 - **Streamlined Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu.
 - **Cutscene Skip**: hold B to skip cutscenes.
 - **Live V-Sync Toggle** in the Display menu.
-- **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements (softcore).
+- **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
 ## Controls & Files
 
