@@ -9,7 +9,7 @@ own build.
 
 ## macOS (Apple Silicon)
 
-### Quick Start (Release `.app`)
+### Quick Start 
 1. Download `Red_Two_macOS_arm64.zip` from the [Releases](../../releases) page and unzip `Red Two.app`.
 2. **First launch (Gatekeeper / ad-hoc signed app)**: because the app is ad-hoc signed and not notarized by Apple, macOS will block it on first launch (or say it is "damaged"). Clear the quarantine flag once in Terminal:
    ```bash
@@ -36,12 +36,13 @@ Settings, saves, save states, logs, shader cache, and texture packs live in `~/L
 ### macOS & QoL Enhancements in this Fork
 - **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, including Aurora shader logic-op fallback (`patches/aurora/0034-logic-op-fallback.patch`).
 - **Standalone macOS `.app` bundle** with bundled dylibs, custom weathered Rogue Squadron icon, and `LSSupportsGameMode` / macOS Fullscreen Spaces support.
-- **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and Pause menu (**Continue** / **Back**).
-- **Audio Commentary Controls**: press **L3** or **C** to pause/resume active MusyX commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
-- **Art Gallery Captions**: bottom-center title and slide counter (`1 / 27`) overlay for all 27 concept art pieces and renders.
+- **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and pause function.
+- **Audio Commentary Controls**: press **L3** or **C** to pause/resume active commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
+- **Art Gallery Captions**: bottom-center title and slide counter overlay for all 27 concept art pieces and renders.
 - **Nintendo Switch Pro Controller** auto-detection & button prompts (`SWITCH`), plus a generic Right Analog Stick icon replacing the baked GameCube C-stick in *Select Craft*.
-- **Streamlined Front-End Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu with consistent Options-style typography and spacing.
-- **Live V-Sync Toggle** in the Display menu, **native instant cutscene skip** via Hold-B (with automatic fast-forward fallback), and instant original exit for *Audio Test* & *Credits*.
+- **Streamlined Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu.
+- **cutscene skip** via button hold
+- **Live V-Sync Toggle** in the Display menu
 
 ---
 
