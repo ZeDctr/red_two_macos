@@ -175,6 +175,7 @@ set(R2_RUNTIME_SOURCES
     src/runtime/gfx/tex_dump.cpp
     src/runtime/gfx/button_icons.cpp
     src/runtime/input.cpp
+    src/runtime/gyro.cpp
     src/runtime/settings.cpp
     src/runtime/hle_game.cpp
     src/runtime/mods.cpp
@@ -185,7 +186,9 @@ set(R2_RUNTIME_SOURCES
     src/runtime/gfx/touch.cpp
     src/runtime/savestate.cpp
     src/runtime/hotkeys.cpp
-    src/runtime/achievements.cpp)
+    src/runtime/achievements.cpp
+    src/runtime/http.cpp
+    src/runtime/update.cpp)
 if(ANDROID)
     add_library(red_two SHARED ${R2_RUNTIME_SOURCES})
     set_target_properties(red_two PROPERTIES OUTPUT_NAME main)  # libmain.so, what SDLActivity loads
@@ -193,6 +196,16 @@ else()
     add_executable(red_two ${R2_RUNTIME_SOURCES})
 endif()
 target_include_directories(red_two PRIVATE src/runtime "${GEN_DIR}" extern/aurora/lib)
+# The version (VERSION: bumped for each release) and whether this is a release build (the
+# downloads: -DR2_RELEASE=ON): only those replace themselves with a newer release (update.cpp).
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" R2_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
+option(R2_RELEASE "a release build: installs newer releases itself" OFF)
+set(_r2_update_defs "R2_VERSION=\"${R2_VERSION}\"")
+if(R2_RELEASE)
+    list(APPEND _r2_update_defs R2_RELEASE_BUILD=1)
+endif()
+set_source_files_properties(src/runtime/update.cpp PROPERTIES COMPILE_DEFINITIONS "${_r2_update_defs}")
 # Program icon: your own res/icon.ico (not in the repository) when it exists, else Red Two's
 # own res/red_two.ico (no game artwork; what public builds use: -DR2_ICON=res/red_two.ico).
 if(EXISTS "${CMAKE_SOURCE_DIR}/res/icon.ico")
@@ -213,9 +226,9 @@ endif()
 target_compile_definitions(red_two PRIVATE ${R2_DEFS})
 target_compile_options(red_two PRIVATE ${_r2_arch} ${_r2_fp})
 target_link_libraries(red_two PRIVATE r2game aurora::core aurora::gx aurora::vi aurora::pad xxHash::xxhash zstd::libzstd
-    rcheevos PNG::PNG)
+    rcheevos PNG::PNG nlohmann_json::nlohmann_json)
 if(WIN32)
-    target_link_libraries(red_two PRIVATE winmm dbghelp winhttp)
+    target_link_libraries(red_two PRIVATE winmm dbghelp winhttp ZLIB::ZLIB)
 elseif(ANDROID)
     # Android: position-independent (save states then load only within a session: the system
     # puts the library anywhere), no stack protector (as the generated code), segments aligned

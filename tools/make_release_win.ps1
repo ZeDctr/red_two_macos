@@ -10,6 +10,12 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $BuildDir) { $BuildDir = Join-Path $root "build\windows" }
 if (-not $Out) { $Out = Join-Path $root "build\RedTwo-windows-x64.zip" }
+# Downloads install newer releases themselves (update.cpp) only when built with -DR2_RELEASE=ON
+# (powershell -File tools\build.ps1 -BuildDir build\release-win -Configure -CMakeArgs -DR2_RELEASE=ON).
+$cache = Join-Path $BuildDir "CMakeCache.txt"
+if (-not (Select-String -Path $cache -Pattern '^R2_RELEASE:BOOL=ON' -Quiet)) {
+    throw "$BuildDir is not a release build (-DR2_RELEASE=ON): its downloads could not update themselves"
+}
 $stage = Join-Path $root "build\release-windows\Red Two"
 if (Test-Path (Split-Path $stage)) { Remove-Item -Recurse -Force (Split-Path $stage) }
 New-Item -ItemType Directory -Force $stage | Out-Null
@@ -43,6 +49,11 @@ Red Two folder (on another drive, a NAS, a USB stick) and it comes along.
 Updating: unzip the new version, then copy this folder over the new one's.
 "@ | Set-Content -Encoding utf8 (Join-Path $stage "user\README.txt")
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $stage "LICENSE.txt")
+# The starter shader list (tools\make_shader_seed.py): Aurora merges it into the player's shader
+# cache at every start, so a new install compiles those shaders before the game begins.
+$seed = Join-Path $root "build\initial_pipeline_cache.db"
+if (Test-Path $seed) { Copy-Item $seed $stage }
+else { Write-Warning "no build\initial_pipeline_cache.db: the zip has no starter shader list (python tools\make_shader_seed.py)" }
 python (Join-Path $root "tools\third_party_notices.py") $BuildDir (Join-Path $stage "THIRD_PARTY_NOTICES.txt")
 if ($LASTEXITCODE) { throw "third_party_notices.py failed" }
 @"

@@ -72,6 +72,11 @@ void set(const std::string& key, const std::string& value) {
     else if (key == "game_dither") s.gameDither = parseBool(value);
     else if (key == "volume") s.volume = n < 0 ? 0 : n > 100 ? 100 : n;
     else if (key == "background_audio") s.backgroundAudio = parseBool(value);
+    else if (key == "check_updates") s.checkUpdates = parseBool(value);
+    else if (key == "speakers") {
+        for (int i = 0; i < int(Speakers::Count); i++)
+            if (value == speakersName(Speakers(i))) s.speakers = Speakers(i);
+    }
     else if (key == "skip_logos") s.skipLogos = parseBool(value);
     else if (key == "fast_disc") s.fastDisc = parseBool(value);
     else if (key == "skip_cutscenes") s.skipCutscenes = parseBool(value);
@@ -93,8 +98,20 @@ void set(const std::string& key, const std::string& value) {
             if (value == buttonPromptsName(ButtonPrompts(i))) s.buttonPrompts = ButtonPrompts(i);
     } else if (key == "stick_deadzone") s.stickDeadzone = std::clamp(n, 0, 50);
     else if (key == "stick_sensitivity") s.stickSensitivity = std::clamp(n, 25, 200);
+    else if (key == "cstick_deadzone") s.cStickDeadzone = std::clamp(n, 0, 50);
+    else if (key == "cstick_sensitivity") s.cStickSensitivity = std::clamp(n, 25, 200);
+    else if (key == "stick_curve") {
+        for (int i = 0; i < int(StickCurve::Count); i++)
+            if (value == stickCurveName(StickCurve(i))) s.stickCurve = StickCurve(i);
+    }
     else if (key == "xbox_buttons")  // (before button_prompts: on = Xbox or, now, PlayStation)
         s.buttonPrompts = parseBool(value) ? ButtonPrompts::Auto : ButtonPrompts::GameCube;
+    else if (key == "gyro") { if (n >= 0 && n < int(GyroMode::Count)) s.gyroMode = GyroMode(n); }
+    else if (key == "gyro_button") s.gyroButton = value;
+    else if (key == "bumper_clicks") s.bumperClicks = parseBool(value);
+    else if (key == "gyro_speed_x") s.gyroSpeedX = std::clamp(n, kGyroSpeedMin, kGyroSpeedMax);
+    else if (key == "gyro_speed_y") s.gyroSpeedY = std::clamp(n, kGyroSpeedMin, kGyroSpeedMax);
+    else if (key == "gyro_invert_y") s.gyroInvertY = parseBool(value);
     else if (key == "state_slot") s.stateSlot = n < 1 ? 1 : n > 8 ? 8 : n;
     else {
         for (int a = 0; a < HkCount; a++) {
@@ -127,7 +144,10 @@ Settings& get() { return s_settings; }
 
 void load() {
     const bool automated = envFlag("R2_BACKGROUND") || envFlag("R2_HEADLESS") || getenv("R2_INPUT");
-    if (automated) s_settings.fastDisc = false;  // input scripts are timed for the drive's speed
+    if (automated) {
+        s_settings.fastDisc = false;     // input scripts are timed for the drive's speed
+        s_settings.ubershaders = false;  // (their tests and shader cache were made without)
+    }
     if (const std::string note = mods::userDirNote(); !note.empty()) logf("config", "%s", note.c_str());
     if (!automated) {
         if (const std::string dir = mods::userDir(); !dir.empty()) s_path = dir + "settings.ini";
@@ -148,7 +168,8 @@ void load() {
             s_settings.fullscreen = true;
             s_settings.aspect = Aspect::Window;
             s_settings.prefetchTextures = false;
-            logf("config", "first start on a Steam Deck: fullscreen, aspect of the screen, no texture prefetch");
+            s_settings.ubershaders = false;  // (a faster start: they take long to compile there)
+            logf("config", "first start on a Steam Deck: fullscreen, aspect of the screen, no texture prefetch, no ubershaders");
         } else {
 #ifdef __ANDROID__
             // the first start on Android: the picture as wide as the screen (wider phones get
@@ -156,6 +177,7 @@ void load() {
             s_settings.fullscreen = true;
             s_settings.aspect = Aspect::Window;
             s_settings.resolution = Resolution::X2;
+            s_settings.ubershaders = false;
             logf("config", "first start on Android: aspect of the screen, 960p");
 #endif
         }
@@ -179,14 +201,15 @@ std::string summary() {
     const Settings& s = s_settings;
     char b[4096];
     snprintf(b, sizeof b,
-             "disc_path=%s launcher=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d game_dither=%d "
-             "show_fps=%d volume=%d background_audio=%d skip_logos=%d skip_cutscenes=%d fast_disc=%d invincible=%d "
+             "disc_path=%s launcher=%d check_updates=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d game_dither=%d "
+             "show_fps=%d volume=%d background_audio=%d speakers=%s skip_logos=%d skip_cutscenes=%d fast_disc=%d invincible=%d "
              "infinite_lives=%d infinite_ammo=%d perfect_stats=%d all_craft=%d custom_textures=%d prefetch_textures=%d "
-             "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
-             s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.ubershaders, s.precompileShaders, s.hudEdges,
-             s.tileMenus, s.gameDither, s.showFps, s.volume, s.backgroundAudio, s.skipLogos, s.skipCutscenes,
+             "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d stick_curve=%s cstick_deadzone=%d cstick_sensitivity=%d bumper_clicks=%d gyro=%s gyro_button=%s gyro_speed=%d/%d gyro_invert_y=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
+             s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.checkUpdates, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.ubershaders, s.precompileShaders, s.hudEdges,
+             s.tileMenus, s.gameDither, s.showFps, s.volume, s.backgroundAudio, speakersName(s.speakers), s.skipLogos, s.skipCutscenes,
              s.fastDisc, s.invincible, s.infiniteLives, s.infiniteAmmo, s.perfectStats, s.allCraft, s.customTextures,
-             s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, s.stateSlot, s.achievements, s.raUser.empty() ? "-" : s.raUser.c_str(),
+             s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, stickCurveName(s.stickCurve), s.cStickDeadzone, s.cStickSensitivity, s.bumperClicks, gyroModeName(s.gyroMode),
+             s.gyroButton.c_str(), s.gyroSpeedX, s.gyroSpeedY, s.gyroInvertY, s.stateSlot, s.achievements, s.raUser.empty() ? "-" : s.raUser.c_str(),
              s.raNotifications, s.raEncore);
     return b;
 }
@@ -227,6 +250,10 @@ void save() {
     fprintf(f, "# master volume 0..100\n");
     fprintf(f, "volume=%d\n", s.volume);
     fprintf(f, "background_audio=%d\n", s.backgroundAudio);
+    fprintf(f, "# ask GitHub for a newer release at start (the menu offers to install it)\n");
+    fprintf(f, "check_updates=%d\n", s.checkUpdates);
+    fprintf(f, "# auto (the system's speaker setup), stereo (Pro Logic II matrix-encoded), 5.1 or 7.1\n");
+    fprintf(f, "speakers=%s\n", speakersName(s.speakers));
     fprintf(f, "skip_logos=%d\n", s.skipLogos);
     fprintf(f, "skip_cutscenes=%d\n", s.skipCutscenes);
     fprintf(f, "# disc reads at SSD speed rather than the GameCube drive's 3 MB/s (shorter loading)\n");
@@ -248,6 +275,21 @@ void save() {
     fprintf(f, "# controller sticks: a round deadzone in %% of the travel (0-50, both sticks), the control stick's sensitivity in %% (25-200)\n");
     fprintf(f, "stick_deadzone=%d\n", s.stickDeadzone);
     fprintf(f, "stick_sensitivity=%d\n", s.stickSensitivity);
+    fprintf(f, "# the C-stick (the controller's right stick): deadzone 0..50, sensitivity 25..200\n");
+    fprintf(f, "cstick_deadzone=%d\n", s.cStickDeadzone);
+    fprintf(f, "cstick_sensitivity=%d\n", s.cStickSensitivity);
+    fprintf(f, "# how turning follows the control stick: smooth, linear or gamecube (the game's own curve)\n");
+    fprintf(f, "stick_curve=%s\n", stickCurveName(s.stickCurve));
+    fprintf(f, "# gyro aiming in flight: 0 off, 1 always, 2 while the button is held, 3 the button toggles it, 4 off while held\n");
+    fprintf(f, "gyro=%d\n", int(s.gyroMode));
+    fprintf(f, "# the triggers' clicks (full boost / brake) on LB / RB, the triggers analog only, Z on the right stick click\n");
+    fprintf(f, "bumper_clicks=%d\n", s.bumperClicks);
+    fprintf(f, "# SDL gamepad button name: misc3 / misc4 the Steam Deck's left / right stick touch, paddle1-4 R4 L4 R5 L5\n");
+    fprintf(f, "gyro_button=%s\n", s.gyroButton.c_str());
+    fprintf(f, "# percent (%d-%d): turning (left / right) and pitch (up / down)\n", kGyroSpeedMin, kGyroSpeedMax);
+    fprintf(f, "gyro_speed_x=%d\n", s.gyroSpeedX);
+    fprintf(f, "gyro_speed_y=%d\n", s.gyroSpeedY);
+    fprintf(f, "gyro_invert_y=%d\n", s.gyroInvertY);
     fprintf(f, "# RetroAchievements (softcore): the account and its login token (not the password)\n");
     fprintf(f, "achievements=%d\n", s.achievements);
     fprintf(f, "ra_user=%s\n", s.raUser.c_str());
@@ -297,6 +339,34 @@ const char* buttonPromptsName(ButtonPrompts p) {
     case ButtonPrompts::PlayStation: return "playstation";
     case ButtonPrompts::GameCube: return "gamecube";
     default: return "auto";
+    }
+}
+
+const char* stickCurveName(StickCurve c) {
+    switch (c) {
+    case StickCurve::Linear: return "linear";
+    case StickCurve::GameCube: return "gamecube";
+    default: return "smooth";
+    }
+}
+
+const char* speakersName(Speakers s) {
+    switch (s) {
+    case Speakers::Stereo: return "stereo";
+    case Speakers::Surround51: return "5.1";
+    case Speakers::Surround71: return "7.1";
+    default: return "auto";
+    }
+}
+
+const char* gyroModeName(GyroMode m) {
+    switch (m) {
+    case GyroMode::Off: return "Off";
+    case GyroMode::Always: return "Always on";
+    case GyroMode::Held: return "While held";
+    case GyroMode::Toggle: return "Button toggles";
+    case GyroMode::Paused: return "Off while held";
+    default: return "?";
     }
 }
 

@@ -1,6 +1,7 @@
 // Game-side hooks (hooks.txt) for the port's options: frame rate, skips, cheats (settings.h).
 #include "funcs.h"
 #include "runtime.h"
+#include "gyro.h"
 #include "settings.h"
 #include "hw/gx_fifo.h"
 #include "../common/disc_image.h"
@@ -330,6 +331,38 @@ static u32 playerCraft() {
     return lastIsCraft ? p : 0;
 }
 
+// R2_GYRO_LOG: twice a second the player's craft's turn rate - the angle of its rotation (3x3 at
+// +0x84) since the last line, whichever way the matrix is stored (trace of R1 R0^T) - against what
+// the gyro sent (gyro.cpp logs that): to measure the turn rate a stick deflection gives
+static void gyroProbe(u32 craft, bool flying) {
+    static const bool log = envFlag("R2_GYRO_LOG");
+    if (!log) return;
+    static float last[9];
+    static u64 lastTb = 0;
+    const u64 tb = tbNow();
+    if (!craft || !flying) {
+        lastTb = 0;
+        return;
+    }
+    if (lastTb && tb - lastTb < kTbClock / 2) return;
+    float m[9];
+    for (int i = 0; i < 9; i++) {
+        const u32 w = rd32(craft + 0x84 + u32(i) * 4);
+        memcpy(&m[i], &w, 4);
+    }
+    if (lastTb) {
+        double tr = 0;
+        for (int i = 0; i < 9; i++) tr += double(m[i]) * double(last[i]);
+        const double ang = std::acos(std::clamp((tr - 1.0) / 2.0, -1.0, 1.0)) * 57.29577951;
+        const double dt = double(tb - lastTb) / double(kTbClock);
+        // (rows: right, up, forward - heading atan2(m6, m8), pitch asin(m7); y is height)
+        logf("gyro", "craft turns %.1f deg/s; m %.3f %.3f %.3f / %.3f %.3f %.3f / %.3f %.3f %.3f", ang / dt, m[0], m[1],
+             m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+    }
+    memcpy(last, m, sizeof m);
+    lastTb = tb;
+}
+
 // Skippable cutscenes (settings): the game has no skip for the crawl and most cutscenes, so a
 // press of B in a letterboxed cinematic (the VI shows 304 lines there, 450 in flight) runs the
 // game flat out until play resumes: retraces at kSkipHz, kSkipStep game seconds per frame
@@ -423,6 +456,10 @@ void hle_GameFrameDelta(Ctx& c) {
     // at 1080p). GameState 0x7FDE8668 (setter 0x7FC03CD8): 0 in play, 2 paused (0x7FCD95D4,
     // back to 0 at 0x7FCD96B8), 3 in front-end loops; found diffing dumps flying / paused.
     const bool inPlay = rd32(0x7FDE8668) == 0;
+    // gyro aiming steers only the craft in flight: menus, the pause screen and cutscenes read the
+    // main stick too
+    gyro::setFlight(flyingFrames > 0 && inPlay && !s_skip);
+    gyroProbe(craft, flyingFrames > 0);
     gfx::setHudAnchoring(s.hudEdges && s.aspect != settings::Aspect::R4_3 && playerCraft() && !cinematic && inPlay);
     // menu screens only (no player craft; not the boot screen's intro and logos, whose 2D draws
     // also look like a run of panels, nor letterboxed cinematics): the background's panels

@@ -47,6 +47,8 @@
 #include "../hw/musyx_dsp.h"
 #include "../mods.h"
 #include "../achievements.h"
+#include "../update.h"
+#include "../gyro.h"
 #include "../runtime.h"
 #include "../savestate.h"
 #include "../settings.h"
@@ -425,7 +427,17 @@ void bindRow(const ControlRow& row, const aurora::binding::PhysicalInput& in) {
     using Dir = PhysicalInput::GamepadAxis::Direction;
     const auto target = profileTarget();
     if (row.sign == 0) {
-        aurora::pad::rebind(target, row.control, in);
+        // L / R on a controller's trigger: its click (the digital L / R) at the profile's trigger
+        // threshold, as Aurora binds it by default - the binding's own 0.5 clicked at half travel
+        // (issue #6; input.cpp setUpControllers mends older rebinds)
+        Binding b{.input = in};
+        const auto* ax = in.control.get_if<PhysicalInput::GamepadAxis>();
+        if (row.second && ax && (ax->axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || ax->axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
+            const aurora::pad::Profile* prof = aurora::pad::profile(target);
+            const aurora::pad::ProfileSettings s = prof ? prof->settings : aurora::pad::ProfileSettings{};
+            b.threshold = row.control == aurora::pad::controls().l ? s.leftTriggerThreshold : s.rightTriggerThreshold;
+        }
+        aurora::pad::rebind(target, row.control, b);
         if (row.second) aurora::pad::rebind(target, row.second, in, aurora::pad::ConflictPolicy::Allow);
     } else {
         // keep the other direction's bindings (splitting a full axis into its other half)
@@ -680,33 +692,60 @@ bool fpsRow(const char* text, int& fps, const char* help) {
 // 0..100: a bar the mouse drags, left/right step 5
 // The Controls page's stick meter: port 1's control stick as it is (dot), the deadzone (shaded)
 // and what the game gets after the deadzone and sensitivity (gold), to tune both by eye.
-void stickMeter() {
-    static float rx = 0.f, ry = 0.f;
-    static bool pad = false;
+const char* stickCurveLabel(settings::StickCurve c) {
+    switch (c) {
+    case settings::StickCurve::Linear: return "Linear";
+    case settings::StickCurve::GameCube: return "GameCube";
+    default: return "Smooth";
+    }
+}
+
+// port 1's control stick (the controller's left stick) or C-stick (its right one): where it is, the
+// deadzone, and what the game gets - the turn / pitch rate in flight for the control stick, the
+// fraction of its range for the C-stick
+void stickMeter(bool mainStick) {
+    static float sx[2] = {}, sy[2] = {};
+    static bool pads[2] = {};
+    const int k = mainStick ? 0 : 1;
+    float& rx = sx[k];
+    float& ry = sy[k];
+    bool& pad = pads[k];
     if (input::JoystickAccess joy; joy) {  // (else the last reading: the input thread is scanning)
         const auto src = aurora::pad::port_controller(0);
         SDL_Gamepad* g = src ? SDL_GetGamepadFromID(aurora::input::gamepad_for_source(src)) : nullptr;
         pad = g != nullptr;
         if (g) {
-            rx = float(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX)) / 32767.f;
-            ry = float(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY)) / 32767.f;
+            rx = float(SDL_GetGamepadAxis(g, mainStick ? SDL_GAMEPAD_AXIS_LEFTX : SDL_GAMEPAD_AXIS_RIGHTX)) / 32767.f;
+            ry = float(SDL_GetGamepadAxis(g, mainStick ? SDL_GAMEPAD_AXIS_LEFTY : SDL_GAMEPAD_AXIS_RIGHTY)) / 32767.f;
         }
     }
-    if (static const char* test = getenv("R2_STICK_METER_TEST"); test && !pad)  // "x,y" (screenshots)
-        pad = sscanf(test, "%f,%f", &rx, &ry) == 2;
+    if (static const char* test = getenv("R2_STICK_METER_TEST"); test) {  // "x,y[,cx,cy]" (screenshots)
+        float v[4] = {};
+        const int n = sscanf(test, "%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3]);
+        if (n >= 2 * (k + 1)) {
+            pad = true;
+            rx = v[2 * k];
+            ry = v[2 * k + 1];
+        }
+    }
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float r = 54.f * s_ui, size = 2.f * r + 16.f * s_ui;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c(p.x + s_valueX + r + 8.f * s_ui, p.y + size * 0.5f);
     if (!pad) {
-        dl->AddText(ImVec2(p.x + 18.f * s_ui, p.y), kDim, "Connect a controller to see its control stick here.");
+        dl->AddText(ImVec2(p.x + 18.f * s_ui, p.y), kDim,
+                    mainStick ? "Connect a controller to see its control stick here." : "Connect a controller to see its C-stick here.");
         ImGui::Dummy(ImVec2(0.f, ImGui::GetFrameHeight()));
         return;
     }
     const auto& st = settings::get();
-    const float dz = float(st.stickDeadzone) / 100.f;
-    float ox = rx, oy = ry;
-    input::shapeStick(ox, oy, true);
+    const float dz = float(mainStick ? st.stickDeadzone : st.cStickDeadzone) / 100.f;
+    // the dot: the turn / pitch rate the stick gives the craft in flight (0..1 of its maximum), or
+    // the C-stick's fraction of its range
+    float ox = 0.f, oy = 0.f;
+    s8 gx = 0, gy = 0;
+    if (mainStick) input::mainStickToGame(rx, ry, gx, gy, &ox, &oy);
+    else input::cStickToGame(rx, ry, gx, gy, &ox, &oy);
     auto at = [&](float x, float y) {
         const float m = std::sqrt(x * x + y * y), k = m > 1.05f ? 1.05f / m : 1.f;  // (a keyboard's diagonal)
         return ImVec2(c.x + x * k * r, c.y + y * k * r);
@@ -723,10 +762,85 @@ void stickMeter() {
     dl->AddCircleFilled(at(rx, ry), 4.f * s_ui, kText, 16);
     dl->AddCircleFilled(at(ox, oy), 6.f * s_ui, kGold, 16);
     char buf[96];
-    snprintf(buf, sizeof buf, "STICK %3.0f%%   TO THE GAME %3.0f%%", std::min(1.f, std::sqrt(rx * rx + ry * ry)) * 100.f,
-             std::min(1.f, std::sqrt(ox * ox + oy * oy)) * 100.f);
+    if (mainStick)
+        snprintf(buf, sizeof buf, "STICK %3.0f%%   TURN %3.0f%%   PITCH %3.0f%%", std::min(1.f, std::sqrt(rx * rx + ry * ry)) * 100.f,
+                 std::fabs(ox) * 100.f, std::fabs(oy) * 100.f);
+    else
+        snprintf(buf, sizeof buf, "STICK %3.0f%%   TO THE GAME %3.0f%%", std::min(1.f, std::sqrt(rx * rx + ry * ry)) * 100.f,
+                 std::min(1.f, std::sqrt(ox * ox + oy * oy)) * 100.f);
     dl->AddText(ImVec2(c.x + r + 24.f * s_ui, c.y - ImGui::GetFontSize() * 0.5f), kDim, buf);
     ImGui::Dummy(ImVec2(0.f, size));
+}
+
+// Port 1's triggers, like Dolphin's controller page: how far each is pulled, where it clicks (the
+// tick; none when the bumpers have the clicks), the click lighting up, and what the game gets
+// (its PADClamp reads 30 and less as nothing and 170 as all: (v - 30) / 140).
+void triggerMeter() {
+    static input::TriggerView v{};
+    static bool pad = false;
+    static u64 lastTb = 0;
+    if (const u64 now = tbNow(); now - lastTb > kTbClock / 120) {  // (read once a frame at most)
+        lastTb = now;
+        input::TriggerView n{};
+        const int got = input::port1Triggers(n);
+        if (got > 0) v = n;
+        if (got >= 0) pad = got > 0;  // (-1: the input thread is scanning - the last reading)
+    }
+    if (static const char* test = getenv("R2_TRIGGER_METER_TEST"); test) {  // "l,r" travel (screenshots)
+        float l = 0.f, r = 0.f;
+        if (sscanf(test, "%f,%f", &l, &r) == 2) {
+            pad = true;
+            const float t[2] = {l, r};
+            for (int i = 0; i < 2; i++) {
+                v.travel[i] = t[i];
+                v.clickAt[i] = settings::get().bumperClicks ? 0.f : 0.95f;
+                v.click[i] = v.clickAt[i] > 0.f && t[i] >= v.clickAt[i];
+                const float full = v.clickAt[i] > 0.f ? v.clickAt[i] : 1.f;
+                v.analog[i] = v.click[i] ? 180 : t[i] <= 0.04f ? 0 : u8(std::lround(30.f + (t[i] - 0.04f) / (full - 0.04f) * 140.f));
+            }
+        }
+    }
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (!pad) {
+        dl->AddText(ImVec2(p0.x + 18.f * s_ui, p0.y), kDim, "Connect a controller to see its triggers here.");
+        ImGui::Dummy(ImVec2(0.f, ImGui::GetFrameHeight()));
+        return;
+    }
+    const float h = ImGui::GetFrameHeight(), w = 300.f * s_ui, gap = 6.f * s_ui;
+    static const char* const kNames[2] = {"L trigger (brake)", "R trigger (throttle)"};
+    for (int i = 0; i < 2; i++) {
+        const ImVec2 p(p0.x, p0.y + float(i) * (h + gap));
+        const float cy = p.y + h * 0.5f;
+        dl->AddText(ImVec2(p.x + 18.f * s_ui, cy - ImGui::GetFontSize() * 0.5f), kText, kNames[i]);
+        const float x0 = p.x + s_valueX + 14.f * s_ui, x1 = p.x + s_valueX + w - 14.f * s_ui;
+        const float th = 12.f * s_ui, t = std::clamp(v.travel[i], 0.f, 1.f), fx = x0 + (x1 - x0) * t;
+        dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), IM_COL32(30, 52, 86, 255), th * 0.3f);
+        if (t > 0.f) {
+            const ImU32 a = v.click[i] ? IM_COL32(255, 120, 60, 255) : alpha(kAmber, 200);
+            const ImU32 b = v.click[i] ? IM_COL32(255, 70, 40, 255) : kGold;
+            dl->AddRectFilledMultiColor(ImVec2(x0, cy - th * 0.5f), ImVec2(fx, cy + th * 0.5f), a, b, b, a);
+        }
+        if (v.clickAt[i] > 0.f) {  // where the click is
+            const float cx = x0 + (x1 - x0) * v.clickAt[i];
+            dl->AddLine(ImVec2(cx, cy - th * 1.1f), ImVec2(cx, cy + th * 1.1f), alpha(kText, 200), 2.f * s_ui);
+        }
+        dl->AddRect(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), alpha(kGold, 90), th * 0.3f, 0, 1.f);
+        const float game = std::clamp((float(v.analog[i]) - 30.f) / 140.f, 0.f, 1.f);
+        char buf[64];
+        snprintf(buf, sizeof buf, "%3.0f%%   GAME %3.0f%%", t * 100.f, game * 100.f);
+        const float tx = p.x + s_valueX + w + 10.f * s_ui;
+        dl->AddText(ImVec2(tx, cy - ImGui::GetFontSize() * 0.5f), kDim, buf);
+        // the click: full brake / boost
+        const char* tag = i ? "BOOST" : "BRAKE";
+        const ImVec2 ts = ImGui::CalcTextSize(tag);
+        const float bx = tx + ImGui::CalcTextSize(buf).x + 14.f * s_ui, pad2 = 6.f * s_ui;
+        const ImVec2 b0(bx, cy - ts.y * 0.5f - 2.f * s_ui), b1(bx + ts.x + 2.f * pad2, cy + ts.y * 0.5f + 2.f * s_ui);
+        if (v.click[i]) dl->AddRectFilled(b0, b1, IM_COL32(255, 90, 50, 230), 3.f * s_ui);
+        dl->AddRect(b0, b1, v.click[i] ? IM_COL32(255, 160, 120, 255) : alpha(kDim, 90), 3.f * s_ui, 0, 1.f);
+        dl->AddText(ImVec2(bx + pad2, cy - ts.y * 0.5f), v.click[i] ? IM_COL32(255, 255, 255, 255) : alpha(kDim, 140), tag);
+    }
+    ImGui::Dummy(ImVec2(0.f, 2.f * h + gap));
 }
 
 // a bar from lo to hi percent (steps of `step` from the controller / keys, any value by mouse)
@@ -762,6 +876,19 @@ bool percentRow(const char* text, int& v, const char* help, int lo = 0, int hi =
     ImGui::PushStyleColor(ImGuiCol_Text, sel ? vec(kGold) : vec(kText));
     ImGui::Text("%d%%", nv);
     ImGui::PopStyleColor();
+    if (nv == v) return false;
+    v = nv;
+    return true;
+}
+
+// gyro sensitivity: percent in steps of 10
+bool gyroSpeedRow(const char* text, int& v, const char* help) {
+    const bool sel = rowBegin(text, help);
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d%%", v);
+    int step = selector(text, buf, v > settings::kGyroSpeedMin, v < settings::kGyroSpeedMax, sel);
+    if (sel) step += s_in.dx;
+    const int nv = std::clamp(v + step * 10, settings::kGyroSpeedMin, settings::kGyroSpeedMax);
     if (nv == v) return false;
     v = nv;
     return true;
@@ -828,6 +955,112 @@ bool discBrowserShown();
 std::string discRowText();
 void pageBrowse(settings::Settings& s);
 
+// --- updates (update.cpp): a newer release, its download and install, the restart into it ---
+void infoRow(const char* text, const std::string& value, const char* help, ImU32 col);  // (below)
+void openUrl(const std::string& url) {
+    if (!SDL_OpenURL(url.c_str())) logf("menu", "cannot open %s: %s", url.c_str(), SDL_GetError());
+    else logf("menu", "opened %s", url.c_str());
+}
+
+bool s_confirmUpdateRestart = false;
+
+void restartIntoUpdate() {
+    logf("menu", "restarting into Red Two %s", update::status().latest.c_str());
+    setRestartProgram(update::restartProgram());
+    if (s_launcher) restartGame(true);  // (returns only if it could not start the new version)
+    else resetGame(true);
+}
+
+// a bar that only shows progress (not a value to change)
+void progressRow(const char* text, float fraction, const std::string& caption, const char* help) {
+    rowBegin(text, help);
+    const float w = 380.f * s_ui, h = ImGui::GetFrameHeight();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(w, h));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float x0 = p.x + 14.f * s_ui, x1 = p.x + w - 14.f * s_ui, cy = p.y + h * 0.5f, th = 10.f * s_ui;
+    dl->AddRectFilled(ImVec2(x0, cy - th * 0.5f), ImVec2(x1, cy + th * 0.5f), IM_COL32(30, 52, 86, 255), th * 0.3f);
+    const float fx = x0 + (x1 - x0) * std::clamp(fraction, 0.f, 1.f);
+    if (fx > x0) dl->AddRectFilledMultiColor(ImVec2(x0, cy - th * 0.5f), ImVec2(fx, cy + th * 0.5f), alpha(kAmber, 200), kGold, kGold, alpha(kAmber, 200));
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(caption.c_str());
+}
+
+void updateSection() {
+    using P = update::Phase;
+    const update::Status u = update::status();
+    if (u.phase != P::Available && u.phase != P::Downloading && u.phase != P::Installing && u.phase != P::Ready &&
+        u.phase != P::Failed && u.phase != P::Updated)
+        return;
+    heading("UPDATE");
+    char buf[192];
+    switch (u.phase) {
+    case P::Available:
+        snprintf(buf, sizeof buf, "Red Two %s is out (you have %s)", u.latest.c_str(), update::version());
+        infoRow("New version", buf, "A newer Red Two is on GitHub. Its release notes say what changed.", kAmber);
+        if (u.canInstall) {
+            if (buttonRow("Update", "DOWNLOAD AND INSTALL",
+                          "Downloads the new version, checks it and puts it in place of this one; then Red Two restarts "
+                          "into it. Your settings, controls, memory card, save states and texture packs stay as they are "
+                          "(save states only load into the version that made them).",
+                          kAmber))
+                update::install();
+        } else if (buttonRow("Update", "OPEN THE DOWNLOAD PAGE",
+                             "This copy of Red Two cannot replace itself (built from source, or not the release download): "
+                             "get the new version from its release page.",
+                             kAmber)) {
+            openUrl(u.pageUrl);
+        }
+        break;
+    case P::Downloading: {
+        const float frac = u.total ? float(double(u.got) / double(u.total)) : 0.f;
+        snprintf(buf, sizeof buf, "%.0f / %.0f MB", double(u.got) / 1e6, double(u.total) / 1e6);
+        progressRow("Downloading", frac, buf, "The new version is downloading. You can keep playing meanwhile.");
+        break;
+    }
+    case P::Installing:
+        infoRow("Installing", "Checking the download and putting it in place...", "Almost done.", kText);
+        break;
+    case P::Ready:
+        snprintf(buf, sizeof buf, "RESTART INTO %s", u.latest.c_str());
+        if (s_launcher ? buttonRow("Update installed", buf, "Red Two restarts into the new version.", kAmber)
+                       : confirmRow("Update installed", buf, "PRESS AGAIN: RESTART", s_confirmUpdateRestart,
+                                    "Red Two restarts into the new version, in the launcher. What the game saved to its "
+                                    "memory card and your save states are kept; a mission in progress is not. Or keep "
+                                    "playing: the next start is the new version."))
+            restartIntoUpdate();
+        break;
+    case P::Failed: {
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kAmber));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(("The update did not work. " + u.error).c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        if (buttonRow("Update", "TRY AGAIN", "Download and install the new version again.", kAmber)) update::install();
+        break;
+    }
+    case P::Updated:
+        snprintf(buf, sizeof buf, "Red Two %s (updated from %s)", u.latest.c_str(), u.from.c_str());
+        infoRow("Updated", buf, "This is the new version. Its release notes say what changed.", kGold);
+        break;
+    default:
+        break;
+    }
+    if (!u.pageUrl.empty() && buttonRow("What's new", "RELEASE NOTES", "Opens the release's page on GitHub in your browser."))
+        openUrl(u.pageUrl);
+}
+
+// R2_UPDATE_TEST=install (tests): restart into the update as soon as it is in place
+void updatePoll() {
+    static const bool autoRestart = getenv("R2_UPDATE_TEST") && !strcmp(getenv("R2_UPDATE_TEST"), "install");
+    static bool done = false;
+    if (autoRestart && !done && update::status().phase == update::Phase::Ready) {
+        done = true;
+        restartIntoUpdate();
+    }
+}
+
 void pageDisplay(settings::Settings& s) {
     if (discBrowserShown()) {
         pageBrowse(s);
@@ -837,6 +1070,7 @@ void pageDisplay(settings::Settings& s) {
         pageDisc();
         return;
     }
+    updateSection();
     heading("GAME");
     if (s_launcher) {
         if (buttonRow("Start game", discReady() ? "LAUNCH" : "CHOOSE THE DISC FIRST",
@@ -873,6 +1107,15 @@ void pageDisplay(settings::Settings& s) {
                                "with this switch in the in-game menu (F1 or the controller's Back)."
                              : "On: Red Two opens the launcher before the game starts. Off: straight into the game."))
         s_changed = true;
+    {
+        std::string help = std::string("At start, Red Two asks GitHub whether a newer version is out, and offers it at the top "
+                                       "of this page. Off: it never asks. This is Red Two ") +
+                           update::version() + ".";
+        if (toggleRow("Check for updates", s.checkUpdates, help.c_str())) {
+            s_changed = true;
+            if (s.checkUpdates) update::check();
+        }
+    }
     if (confirmRow("Quit to desktop", "QUIT", "PRESS AGAIN: QUIT", s_confirmQuit,
                    "Close Red Two. What the game saved to its memory card and your save states are kept; a mission in "
                    "progress is not.")) {
@@ -954,6 +1197,18 @@ void pageGameplay(settings::Settings& s) {
         s_changed = true;
 }
 
+const char* speakersLabel(settings::Speakers sp) {
+    switch (sp) {
+    case settings::Speakers::Stereo: return "Stereo";
+    case settings::Speakers::Surround51: return "5.1 surround";
+    case settings::Speakers::Surround71: return "7.1 surround";
+    default: {
+        const int n = audio::outputChannels();
+        return n == 8 ? "Automatic (7.1)" : n == 6 ? "Automatic (5.1)" : "Automatic (stereo)";
+    }
+    }
+}
+
 void pageAudio(settings::Settings& s) {
     heading("VOLUME");
     if (percentRow("Master volume", s.volume,
@@ -961,6 +1216,12 @@ void pageAudio(settings::Settings& s) {
                    "menu (Sound Settings)."))
         s_changed = true;
     heading("OUTPUT");
+    if (enumRow("Speakers", s.speakers, speakersLabel,
+                "Stereo plays the game's Pro Logic II surround matrix-encoded, for a receiver's decoder. 5.1 and "
+                "7.1 play it on speakers of their own (the game's sound setting must be STEREO, not MONO).")) {
+        s_changed = true;
+        audio::setSpeakers(int(s.speakers));
+    }
     if (toggleRow("Sound in background", s.backgroundAudio,
                   "Keep playing sound while another window has the focus. Off: silent until you come back."))
         s_changed = true;
@@ -1907,18 +2168,46 @@ void pageControls() {
     heading("CONTROL STICK");
     {
         settings::Settings& st = settings::get();
-        if (percentRow("Stick sensitivity", st.stickSensitivity,
-                       "How much the control stick steers: below 100% finer aiming (full deflection is never "
-                       "reached), above it full deflection comes sooner. The meter below shows the result.",
+        if (percentRow("Sensitivity", st.stickSensitivity,
+                       "How much the control stick (your left stick) steers: below 100% finer aiming (full "
+                       "deflection is never reached), above it full deflection comes sooner. The meter below "
+                       "shows the result.",
                        25, 200, 5))
             s_changed = true;
-        if (percentRow("Stick deadzone", st.stickDeadzone,
-                       "How far a stick moves before anything happens (both sticks; round, and the output grows from "
+        if (enumRow("Response", st.stickCurve, stickCurveLabel,
+                    "How fast the craft turns for how far the stick goes. Smooth: gentle near the center, building "
+                    "up evenly to full speed. Linear: in proportion to the stick. GameCube: the game's own curve, "
+                    "half speed up to 80% of the stick, then a jump to full."))
+            s_changed = true;
+        if (percentRow("Deadzone", st.stickDeadzone,
+                       "How far the control stick moves before anything happens (round, and the output grows from "
                        "zero at its edge). Raise it if the craft drifts with the stick let go.",
                        0, 50, 1))
             s_changed = true;
-        stickMeter();
+        stickMeter(true);
     }
+    heading("C-STICK");
+    {
+        settings::Settings& st = settings::get();
+        if (percentRow("C-stick sensitivity", st.cStickSensitivity,
+                       "How much the C-stick (your right stick) moves: below 100% it never reaches the edge, above "
+                       "it the edge comes sooner. The meter below shows the result.",
+                       25, 200, 5))
+            s_changed = true;
+        if (percentRow("C-stick deadzone", st.cStickDeadzone,
+                       "How far the C-stick moves before anything happens (round, and the output grows from zero at "
+                       "its edge).",
+                       0, 50, 1))
+            s_changed = true;
+        stickMeter(false);
+    }
+    heading("TRIGGERS");
+    if (toggleRow("Trigger clicks on LB / RB", settings::get().bumperClicks,
+                  "A GameCube trigger clicks at the end of its pull: full boost (wings closed, no firing) or full brake. "
+                  "On: the triggers only throttle and brake, LB / RB click (as players set up in Dolphin), and Z moves "
+                  "from RB to the right stick click. Changes the controller's bindings below."))
+        s_changed = true;
+    triggerMeter();
     heading("ON-SCREEN BUTTONS");
     {
         settings::Settings& st = settings::get();
@@ -1936,6 +2225,51 @@ void pageControls() {
             buttonIconsUpdate();
         }
     }
+    heading("GYRO AIMING");
+    {
+        settings::Settings& st = settings::get();
+        const std::string pad = gyro::controllerName();
+        std::string help = "Turn and tilt the controller to steer the craft in flight, on top of the stick (menus, the pause "
+                           "screen and cutscenes are left alone). ";
+        help += pad.empty() ? "No controller with a gyro found (a Steam Deck, DualSense, DualShock 4 or Switch Pro "
+                              "Controller has one; Xbox controllers do not). Steam Input hides it: turn Steam Input off "
+                              "for Red Two (Properties > Controller)."
+                            : "Gyro: " + pad + ".";
+        if (enumRow("Gyro aiming", st.gyroMode, settings::gyroModeName, help.c_str())) s_changed = true;
+    }
+    {
+        settings::Settings& st = settings::get();
+        const bool sel = rowBegin("Gyro button", "The button for While held, Button toggles and Off while held, from those "
+                                                 "the gyro's controller has. Touches keep the gyro on while a finger rests: "
+                                                 "the Steam Deck's left stick touch (the stick you fly with), a DualSense's "
+                                                 "or DualShock 4's touchpad.");
+        // the buttons the controller has (all of them while none is found), in kButtons' order
+        const u32 avail = gyro::availableButtons();
+        const int eff = gyro::effectiveButton();  // the setting's, or what stands in for it
+        int list[gyro::kButtonCount], n = 0, shown = -1;
+        for (int i = 0; i < gyro::kButtonCount; i++)
+            if (avail >> i & 1) {
+                if (i == eff) shown = n;
+                list[n++] = i;
+            }
+        const char* label = eff >= 0 ? gyro::kButtons[eff].label : st.gyroButton.c_str();  // (one set in settings.ini)
+        const int cur = std::max(shown, 0);
+        const int next = n ? choiceStep(cur, n, selector("gyrobutton", label, cur > 0, cur < n - 1, sel), sel) : cur;
+        if (n && (next != cur || (shown < 0 && sel && (s_in.dx || s_in.accept)))) {
+            st.gyroButton = gyro::kButtons[list[next]].sdlName;
+            s_changed = true;
+        }
+    }
+    if (gyroSpeedRow("Gyro turning", settings::get().gyroSpeedX,
+                     "How far the craft turns left / right for a turn of the controller: 100% as far as the controller "
+                     "(up to the craft's own limit)."))
+        s_changed = true;
+    if (gyroSpeedRow("Gyro pitch", settings::get().gyroSpeedY,
+                     "How far the nose goes up / down for a tilt of the controller: 100% as far as the controller."))
+        s_changed = true;
+    if (toggleRow("Invert gyro pitch", settings::get().gyroInvertY,
+                  "Off: tilting the top of the controller toward you raises the nose. On: it lowers it."))
+        s_changed = true;
     heading("SAVE STATES");
     {
         settings::Settings& st = settings::get();
@@ -2169,6 +2503,14 @@ bool drawMenu(settings::Settings& s, float t) {
     const float statusPx = 17.f * s_ui;
     drawText(bg, s_font, statusPx, ImVec2(lamp.x - 22.f * s_ui - textWidth(s_font, statusPx, status, 2.f * s_ui), lamp.y - 9.f * s_ui),
              kDim, status, 2.f * s_ui);
+    {
+        const update::Status us = update::status();
+        const bool news = us.phase == update::Phase::Available || us.phase == update::Phase::Ready;
+        const std::string ver = news ? "UPDATE " + us.latest + " AVAILABLE" : std::string("VERSION ") + update::version();
+        const float vpx = 14.f * s_ui;
+        drawText(bg, s_font, vpx, ImVec2(lamp.x - 22.f * s_ui - textWidth(s_font, vpx, ver.c_str(), 2.f * s_ui), lamp.y + 12.f * s_ui),
+                 news ? kAmber : alpha(kDim, 150), ver.c_str(), 2.f * s_ui);
+    }
     const float headerBottom = titleY + titlePx * 1.02f + 30.f * s_ui;
 
     // footer: the selected row's description, then the buttons
@@ -2440,6 +2782,7 @@ bool launcherFrame() {
     ImGuiContext* ctx = ImGui::GetCurrentContext();
     if (!ctx || !ctx->WithinFrameScope) return false;
     modsPoll();
+    updatePoll();
     const float t = float(double(SDL_GetTicks()) / 1000.0);
     drawMenu(settings::get(), t);
     if (s_open) bindSelfTest();
@@ -2685,6 +3028,7 @@ void menuDraw() {
     }
     settings::Settings& s = settings::get();
     modsPoll();
+    updatePoll();
     // button prompts follow the bindings (a controller connected, a rebind): checked twice a second
     {
         static u64 lastIconsTb = 0;

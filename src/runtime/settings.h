@@ -11,6 +11,8 @@ enum class Resolution : int { Window = 0, X1, X2, X3, X4K, Count };  // internal
 // settings.ini keeps the numbers of the old list: 0 4:3, 1 16:9, 2 16:10, 3 21:9, 4 (was 32:9:
 // now 21:9), 5 match the window
 enum class Aspect : int { R4_3 = 0, R16_9, R16_10, R21_9, Window, Count };
+// gyro aiming (gyro.cpp): when the controller's gyro steers. Held / Paused / Toggle use gyroButton.
+enum class GyroMode : int { Off = 0, Always, Held, Toggle, Paused, Count };
 
 // The widest aspect rendered (21:9); a wider window gets bars at the sides. Wider views make the
 // game's cameras cull for more of the world and it keeps more in its virtual memory, which ARAM
@@ -24,10 +26,24 @@ inline constexpr float kMaxAspect = 64.f / 27.f;
 // older xbox_buttons=1/0 reads as auto / gamecube).
 enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, GameCube, Count };
 
+// How the craft's turn and pitch rate follow the control stick (input.cpp mainStickToGame):
+// Smooth grows with the deflection to the power 1.5, Linear in proportion, GameCube is the game's
+// own curve (half rate up to 80% of the stick, then three times as steep). settings.ini:
+// stick_curve=smooth|linear|gamecube
+enum class StickCurve : int { Smooth = 0, Linear, GameCube, Count };
+
+// Sound output (audio.cpp): Auto follows the default device's channels (the system's speaker
+// setup); 5.1 / 7.1 play the game's Pro Logic II surround on speakers of their own, stereo plays
+// it matrix-encoded (a receiver's Pro Logic II decoder unfolds it). settings.ini:
+// speakers=auto|stereo|5.1|7.1
+enum class Speakers : int { Auto = 0, Stereo, Surround51, Surround71, Count };
+
 struct Settings {
     // start: the launcher (the settings menu before the game boots, gfx/menu.cpp) or straight
     // into the game. On until the player turns it off; --launcher / R2_LAUNCHER=1 show it anyway.
     bool launcher = true;
+    // At start, ask GitHub whether a newer release is out (update.cpp); the menu offers it.
+    bool checkUpdates = true;
     // The game disc image chosen in the launcher (its disc page): used at every start unless
     // --disc gives another; empty or unusable: found next to the program, else asked for.
     std::string discPath;
@@ -49,10 +65,12 @@ struct Settings {
     // 8 or 16 (Aurora patch 0030; applies at once)
     int anisotropy = 1;
     // While a shader compiles, a generic one (Aurora's ubershader) draws the object instead of it
-    // being skipped (Dolphin's hybrid ubershaders). Off by default (the user's call): it is the
-    // shader that crashed the Steam Deck's driver before patch 0027, and with shaders compiled
-    // before the game starts only shaders never seen before pop in.
-    bool ubershaders = false;
+    // being skipped (Dolphin's hybrid ubershaders). Without it a shader never seen before on this
+    // PC skips its objects for a few frames: flicker all through a first playthrough (issue #7).
+    // On by default (since 1.2): its pipelines take ~20 s to compile once (8 workers here), then
+    // load from the cache in under a second. Off on a Steam Deck's first start (slower to compile
+    // there) and in automated runs (their shader cache stays as it was).
+    bool ubershaders = true;
     // Every shader in the cache compiled before the game starts ("PREPARING SHADERS",
     // gx_bridge.cpp precompileShaders). Off: the game starts at once and they compile while it
     // runs (objects whose shader is not ready yet are skipped for a few frames: pop-in).
@@ -60,6 +78,7 @@ struct Settings {
     // audio
     int volume = 100;            // master volume, 0..100 (output gain (volume/100)^2)
     bool backgroundAudio = true;  // keep playing while the window is in the background
+    Speakers speakers = Speakers::Auto;
     // game
     bool skipLogos = false;      // boot straight past the legal screen, intro and logos
     bool skipCutscenes = false;  // B (or Start) skips the opening crawl and in-game cutscenes
@@ -91,8 +110,23 @@ struct Settings {
     // Controller sticks (input.cpp shapeStick): a round deadzone in % of the stick's travel that
     // the output rescales from (both sticks), and the control stick's sensitivity in % (output =
     // input x sensitivity, clamped: above 100 full deflection comes sooner, below it never does)
-    int stickDeadzone = 15;      // 0..50
+    int stickDeadzone = 15;      // 0..50 (the control stick; the C-stick has its own)
+    int cStickDeadzone = 15;     // 0..50
+    int cStickSensitivity = 100;  // 25..200
+    // The triggers' clicks (full boost / full brake) on LB / RB, the triggers analog only, Z from
+    // RB to the right stick click (input.cpp placeClicks: the controllers' bindings)
+    bool bumperClicks = false;
     int stickSensitivity = 100;  // 25..200
+    StickCurve stickCurve = StickCurve::Smooth;
+    // Gyro aiming (gyro.cpp): turning and tilting the controller (the Steam Deck itself, a
+    // DualSense, a Switch Pro Controller) steers the craft in flight, on top of the stick. The
+    // button is an SDL gamepad button name (misc3 is the Deck's left stick touch; "touch" a finger
+    // on a touchpad); on a controller without it the gyro uses the first of misc3, touch and
+    // leftstick it has. Sensitivities are percent (100: the craft turns as far as the controller).
+    GyroMode gyroMode = GyroMode::Off;
+    std::string gyroButton = "misc3";
+    int gyroSpeedX = 100, gyroSpeedY = 100;
+    bool gyroInvertY = false;
     // save states (savestate.cpp): the slot the hotkeys use, and the hotkeys (hotkeys.cpp), each a
     // combination held together: controller buttons by SDL name, keys by SDL key name, " + "
     // between them; empty = none
@@ -113,6 +147,10 @@ std::string summary();  // every setting on one line (the session log)
 const char* resolutionName(Resolution r);
 const char* aspectName(Aspect a);
 const char* buttonPromptsName(ButtonPrompts p);  // as settings.ini writes it
+const char* gyroModeName(GyroMode m);
+const char* speakersName(Speakers s);  // as settings.ini writes it
+const char* stickCurveName(StickCurve c);  // as settings.ini writes it
+inline constexpr int kGyroSpeedMin = 10, kGyroSpeedMax = 400;
 float resolutionScale(Resolution r);  // Aurora frame buffer scale; 0 = the window's own size
 float aspectValue(Aspect a);          // width / height (4:3 = the game's own); -1 = the window's
 inline constexpr int kFpsChoices[] = {60, 90, 120, 144};

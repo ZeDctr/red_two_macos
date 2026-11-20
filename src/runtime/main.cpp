@@ -57,6 +57,7 @@ extern char** environ;
 #include "mods.h"
 #include "achievements.h"
 #include "runtime.h"
+#include "update.h"
 #include "settings.h"
 #include "../common/disc_image.h"
 #include "hw/musyx_dsp.h"
@@ -119,6 +120,9 @@ void quit(int code) {
 // Linux: main() keeps its arguments for a restart (the same program image, the same process)
 static char** s_argv = nullptr;
 #endif
+
+static std::string s_restartProgram;  // an update put a new program in place: restart into it
+void setRestartProgram(const std::string& path) { s_restartProgram = path; }
 
 #ifdef __ANDROID__
 // Android: static methods of the activity (android/java/.../RedTwoActivity.java), called on
@@ -244,12 +248,21 @@ void restartGame(bool toLauncher) {
         closedir(d);
         for (int fd : close) ::close(fd);
     }
+    if (s_argv && !s_restartProgram.empty()) {  // (an updated AppImage: the new file, not this mount)
+        std::vector<char*> args;
+        args.push_back(const_cast<char*>(s_restartProgram.c_str()));
+        for (char** a = s_argv + 1; *a; a++) args.push_back(*a);
+        args.push_back(nullptr);
+        execv(s_restartProgram.c_str(), args.data());
+    }
     if (s_argv) execv("/proc/self/exe", s_argv);
     logf("main", "restart failed (errno %d)", errno);
     return;
 #else
     wchar_t exe[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+    if (!s_restartProgram.empty())  // (an update: the new red_two.exe; this one is now red_two.exe.old)
+        MultiByteToWideChar(CP_UTF8, 0, s_restartProgram.c_str(), -1, exe, MAX_PATH);
     std::wstring cmd = GetCommandLineW();
     STARTUPINFOW si{};
     si.cb = sizeof si;
@@ -789,7 +802,7 @@ static void logSessionHeader(int argc, char** argv) {
     for (int i = 1; i < argc; i++) args += std::string(" ") + argv[i];
     char cwd[PATH_MAX] = "";
     if (!getcwd(cwd, sizeof cwd)) cwd[0] = 0;
-    logf("session", "Red Two started %s; exe %s (built %s)%s", now, exe, built.c_str(), args.c_str());
+    logf("session", "Red Two %s started %s; exe %s (built %s)%s", rt::update::version(), now, exe, built.c_str(), args.c_str());
     logf("session", "working directory %s%s%s%s%s", cwd, s_sessionLog.empty() ? "" : "; log ", s_sessionLog.c_str(),
          getenv("APPIMAGE") ? "; AppImage " : "", getenv("APPIMAGE") ? getenv("APPIMAGE") : "");
 }
@@ -856,8 +869,8 @@ static void logSessionHeader(int argc, char** argv) {
     for (int i = 1; i < argc; i++) args += std::string(" ") + argv[i];
     char cwd[MAX_PATH] = "";
     GetCurrentDirectoryA(sizeof cwd, cwd);
-    logf("session", "Red Two started %04u-%02u-%02u %02u:%02u:%02u; exe %s (built %s)%s", now.wYear, now.wMonth, now.wDay,
-         now.wHour, now.wMinute, now.wSecond, exe, built.c_str(), args.c_str());
+    logf("session", "Red Two %s started %04u-%02u-%02u %02u:%02u:%02u; exe %s (built %s)%s", rt::update::version(), now.wYear,
+         now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, exe, built.c_str(), args.c_str());
     logf("session", "working directory %s%s%s", cwd, s_sessionLog.empty() ? "" : "; log ", s_sessionLog.c_str());
 }
 #endif
@@ -1019,6 +1032,7 @@ int main(int argc, char** argv) {
             quit(mods::importCommandLine(argv[i][16] ? argv[i] + 17 : ""));
     }
     mods::codesInit();  // cheat codes (codes.ini), applied every retrace
+    rt::update::init();  // a newer release on GitHub? (setting check_updates; a worker thread)
     viSetRate(settings::get().fps);
     profilerStart();
     diagStart();  // stall reports and perf lines in the log (profiler.cpp)

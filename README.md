@@ -128,10 +128,39 @@ as the screen. Settings, saves, states and logs live in `~/.local/share/Red Two/
   its codes (with their on/off states). `R2_DOLPHIN_DIR=<User folder>` points it elsewhere.
 - **Shaders** (F1, DISPLAY -> PERFORMANCE): "Prepare shaders at start" (on) compiles every shader
   the game has used on this device before it starts; off, the game starts at once and objects may
-  pop in while their shaders compile. "Ubershaders" (off) draws not-yet-compiled objects with a
-  generic shader instead of skipping them.
+  pop in while their shaders compile. "Ubershaders" (on; off on a Steam Deck's first start) draws
+  not-yet-compiled objects with a generic shader instead of skipping them.
 - `R2_NO_AUDIO=1` runs without sound. Every session writes a log to the user folder's `logs`
   (Linux: `~/.local/share/Red Two/logs`); `--console` shows it in a console window on Windows.
+
+## Reporting a problem
+
+Open an issue on the [Issues](../../issues/new/choose) page and pick **Bug report** (or **Feature
+request** for an idea): the form asks for what helps. Please check the open issues first, and
+report one problem per issue. What to have at hand:
+
+- **Red Two's version**: under the menu's title (F1, or the controller's Back / Select), e.g.
+  "VERSION 1.2". Newer versions may already fix it: the menu offers updates at the top of its
+  first page.
+- **What happened and where**: the mission (or menu, cutscene) and the moment, whether it happens
+  every time, and how to get there.
+- **The session log (required)**: a bug report needs the log of the play session where the
+  problem happened. Every start of Red Two writes a new one, named by the date and time it
+  started, so if you started Red Two again afterwards, the newest log is from that later start:
+  pick the right one by its date and time, and drag it into the issue. It's in:
+  - Windows: `user\logs` next to `red_two.exe` (an older install without a `user` folder:
+    `%APPDATA%\Red Two\logs`)
+  - Steam Deck / Linux: `~/.local/share/Red Two/logs`
+
+  It lists your settings, the frame rate every 30 seconds, and what the game was doing in a
+  freeze or a crash. It also shows folder paths, which can include your user name: edit those
+  out if you like.
+- **Your setup**: the controller (and whether Steam starts Red Two), your display and aspect
+  ratio, a texture pack if you use one.
+- **A screenshot or a short video** for anything you can see.
+
+A save state from just before the problem can help too, but states only load into the build that
+made them: mention that you have one, and we'll ask for it if needed.
 
 ## How it works
 

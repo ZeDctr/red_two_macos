@@ -146,7 +146,8 @@ void cardFlushNow();        // card writes not yet in the image file go there no
 // main.cpp: start a new instance with the same arguments, then quit. The new instance goes
 // straight into the game, or to the launcher with toLauncher (R2_LAUNCHER=1/0 in its environment).
 void restartGame(bool toLauncher = false);
-void resetGame(bool toLauncher = false);  // main.cpp: the menu's reset (card writes flushed, then restartGame)
+void resetGame(bool toLauncher = false);
+void setRestartProgram(const std::string& path);  // main.cpp: restarts start this program instead (an update)  // main.cpp: the menu's reset (card writes flushed, then restartGame)
 // main.cpp: the window was closed or the menu's quit chosen: a save state being written and the
 // memory card's last writes reach their files, then the process ends
 [[noreturn]] void quitToDesktop();
@@ -194,8 +195,26 @@ void poll();  // once per frame: Aurora pads/keyboard -> SI controller state
 void rumble(int chan, u32 cmd);  // SI motor bits: 0 stop, 1 rumble, 2 hard stop
 bool isPlayStation(int sdlGamepadType);  // an SDL_GamepadType of a PS3 / PS4 / PS5 controller
 bool port1PlayStation();  // port 1's controller is a PlayStation one (as of the last poll; button prompts)
-// the settings' stick deadzone (round, rescaled) and, for the control stick, sensitivity; -1..1
+// the settings' deadzone (round, rescaled) and sensitivity of the control stick or the C-stick; -1..1
 void shapeStick(float& x, float& y, bool mainStick);
+// The control stick (-1..1, as the controller reports it) as the game gets it: raw PADStatus
+// values, which the game's own PADClamp then takes 15 off and limits to 72 (stick menu meter: the
+// turn / pitch rate that gives in flight, 0..1 of the craft's maximum, in rateX / rateY).
+void mainStickToGame(float x, float y, s8& rawX, s8& rawY, float* rateX = nullptr, float* rateY = nullptr);
+// The C-stick likewise (PADClamp: 15 off, at most 59, 31 each on the diagonal); gameX / gameY: the
+// fraction of its range the game reads (stick menu meter).
+void cStickToGame(float x, float y, s8& rawX, s8& rawY, float* gameX = nullptr, float* gameY = nullptr);
+// Port 1's triggers for the menu's trigger meter: how far each is pulled (0..1, from SDL), what
+// the game gets (analog 0..255 after the travel curve; the click bit) and where the click sits on
+// the travel (0: not on the trigger - the bumpers have it). 1: read; 0: no controller on port 1;
+// -1: the input thread has the controllers (a device scan): keep the last reading.
+struct TriggerView {
+    float travel[2];
+    u8 analog[2];
+    bool click[2];
+    float clickAt[2];
+};
+int port1Triggers(TriggerView& v);
 // The game thread may call SDL's controller API while this is held. Not held: the input thread
 // is updating the controllers, maybe a device scan of seconds - use the previous state instead.
 class JoystickAccess {

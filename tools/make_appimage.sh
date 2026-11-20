@@ -60,6 +60,12 @@ for f in /usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf /usr/share/fon
     fi
 done
 cp "$root/LICENSE" "$app/usr/share/red-two/LICENSE"
+# the starter shader list (tools/make_shader_seed.py): Aurora reads it next to the program
+if [ -f "$root/build/initial_pipeline_cache.db" ]; then
+    cp "$root/build/initial_pipeline_cache.db" "$app/usr/bin/initial_pipeline_cache.db"
+else
+    echo "note: no build/initial_pipeline_cache.db: no starter shader list (tools/make_shader_seed.py)"
+fi
 python3 "$root/tools/third_party_notices.py" "$build" "$app/usr/share/red-two/THIRD_PARTY_NOTICES.txt"
 # the system libraries bundled above: their Debian copyright files
 for f in /usr/share/doc/libpng16-16*/copyright /usr/share/doc/libfreetype6/copyright /usr/share/doc/libbz2-1.0/copyright \

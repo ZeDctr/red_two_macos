@@ -15,6 +15,14 @@
 // default device itself (SDL migrates it), but is opened again when its device is removed
 // (deviceEvent) or stops taking sound - full for a second while playing; device changes are
 // logged, and every perf line says what the game played (sound: blocks, peak, gaps, drops).
+//
+// Speakers (setting speakers): stereo plays the game's own mix - in its Pro Logic II mode
+// matrix-encoded for a receiver's decoder, as the GameCube's output was. 5.1 and 7.1 play the
+// surround discretely: the DSP keeps the rear and the surround channel it folds into the stereo
+// (musyx_dsp.cpp, musyxDiscreteBlock) and the output takes them back out onto speakers of their
+// own (front L/R; center and LFE silent: the game pans between L and R; 7.1 splits the rear into
+// side and back pairs). Automatic picks from the default device's channels (the system's
+// speaker setup). Blocks the DSP did not write play on the front pair.
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_init.h>
@@ -28,6 +36,7 @@
 
 #include "hw/musyx_dsp.h"
 #include "runtime.h"
+#include "settings.h"
 
 namespace rt::audio {
 
@@ -35,8 +44,12 @@ namespace {
 SDL_AudioStream* s_stream = nullptr;
 u32 s_rate = 0;
 float s_gain = 1.f;
+int s_channels = 2;  // the stream's: 2, 6 (5.1) or 8 (7.1)
+int s_speakers = 0;  // settings::Speakers
+bool s_sdlAudio = false;
 FILE* s_dump = nullptr;
 u32 s_dumpBytes = 0, s_dumpRate = 0;
+int s_dumpChannels = 0;
 
 double s_targetMs = 50.0;     // the cushion playback keeps
 constexpr double kMaxMs = 150.0;  // past this blocks are dropped (only after a burst)
@@ -55,8 +68,10 @@ void writeWavHeader() {
     u8 h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
     u32le(h + 4, 36 + s_dumpBytes);
+    h[22] = u8(s_dumpChannels);
     u32le(h + 24, s_dumpRate);
-    u32le(h + 28, s_dumpRate * 4);
+    u32le(h + 28, s_dumpRate * 2 * u32(s_dumpChannels));
+    h[32] = u8(2 * s_dumpChannels);
     u32le(h + 40, s_dumpBytes);
     fseek(s_dump, 0, SEEK_SET);
     fwrite(h, 1, sizeof h, s_dump);
@@ -82,9 +97,33 @@ std::string deviceName(SDL_AudioDeviceID id) {
     return n ? n : "?";
 }
 
+// the default playback device's channels (the system's speaker setup), 0 when unknown
+int deviceChannels() {
+    if (!s_sdlAudio) return 0;
+    SDL_AudioSpec spec{};
+    if (!SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr)) return 0;
+    return spec.channels;
+}
+
+// the output's channels for a speakers setting
+int channelsFor(int speakers) {
+    switch (settings::Speakers(speakers)) {
+    case settings::Speakers::Stereo: return 2;
+    case settings::Speakers::Surround51: return 6;
+    case settings::Speakers::Surround71: return 8;
+    default: {
+        const int n = deviceChannels();
+        return n >= 8 ? 8 : n >= 6 ? 6 : 2;
+    }
+    }
+}
+
+const char* layoutName(int channels) { return channels == 8 ? "7.1" : channels == 6 ? "5.1" : "stereo"; }
+
 // opened paused: playback starts once the cushion is queued (push)
 bool openStream() {
-    const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, int(s_rate)};
+    s_channels = channelsFor(s_speakers);
+    const SDL_AudioSpec spec{SDL_AUDIO_S16, s_channels, int(s_rate)};
     s_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (!s_stream) {
         logf("audio", "no audio device: %s", SDL_GetError());
@@ -94,17 +133,22 @@ bool openStream() {
     s_playing = false;
     s_ratio = 1.f;
     s_fullSinceTb = 0;
-    logf("audio", "output: %u Hz stereo, %.0f ms buffered, on %s", s_rate, s_targetMs,
-         deviceName(SDL_GetAudioStreamDevice(s_stream)).c_str());
+    logf("audio", "output: %u Hz %s, %.0f ms buffered, on %s (%d channels)", s_rate, layoutName(s_channels),
+         s_targetMs, deviceName(SDL_GetAudioStreamDevice(s_stream)).c_str(), deviceChannels());
     return true;
 }
 
-void reopen(const char* why) {
+void reopen(const char* why, bool trouble = true) {
     logf("audio", "output %s: opening the default device again", why);
-    s_perfReopened++;
+    if (trouble) s_perfReopened++;
     if (s_stream) SDL_DestroyAudioStream(s_stream);
     s_stream = nullptr;
     openStream();
+}
+
+// the speakers setting or the device's channels changed what the output should be
+void checkLayout(const char* why) {
+    if (s_stream && channelsFor(s_speakers) != s_channels) reopen(why, false);
 }
 
 // R2_AUDIO_LOG=1: once a second
@@ -133,17 +177,31 @@ void logQueue(double queuedMs) {
 void init() {
     if (const char* d = getenv("R2_AUDIO_DUMP")) {
         s_dump = fopen(d, "wb");
-        if (s_dump) logf("audio", "writing %s", d);
+        if (s_dump) {
+            logf("audio", "writing %s", d);
+            const u8 room[44] = {};  // the header's place (written with each block; it used to land on the first samples)
+            fwrite(room, 1, sizeof room, s_dump);
+        }
     }
     if (const char* ms = getenv("R2_AUDIO_MS")) s_targetMs = std::clamp(atof(ms), 10.0, 120.0);
+    s_speakers = int(settings::get().speakers);
     if (envFlag("R2_NO_AUDIO")) return;
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         logf("audio", "no audio: %s", SDL_GetError());
         return;
     }
+    s_sdlAudio = true;
     s_rate = 32000;
     openStream();
 }
+
+void setSpeakers(int speakers) {
+    if (speakers == s_speakers) return;
+    s_speakers = speakers;
+    checkLayout("speakers changed");
+}
+
+int outputChannels() { return s_stream ? s_channels : channelsFor(s_speakers); }
 
 // every SDL event (gx_bridge pollEvents): playback devices coming and going
 void deviceEvent(const void* p) {
@@ -158,6 +216,7 @@ void deviceEvent(const void* p) {
          e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED ? "" : deviceName(e.adevice.which).c_str(),
          ours && e.adevice.which == ours ? " (the game's output)" : "");
     if (s_stream && e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED && e.adevice.which == ours) reopen("device removed");
+    else if (settings::Speakers(s_speakers) == settings::Speakers::Auto) checkLayout("speaker setup changed");
     // no output so far (there was no device), and now there is one
     static const bool none = envFlag("R2_NO_AUDIO");
     if (!s_stream && !none && s_rate && e.type == SDL_EVENT_AUDIO_DEVICE_ADDED) openStream();
@@ -180,26 +239,49 @@ void setGain(float gain) {
     if (s_stream) SDL_SetAudioStreamGain(s_stream, gain);
 }
 
-void push(const u8* data, u32 frames, u32 rate) {
-    static std::vector<s16> buf;
-    buf.resize(size_t(frames) * 2);
-    int peak = 0;
-    for (u32 i = 0; i < frames * 2; i++) {
-        buf[i] = s16(data[2 * i] << 8 | data[2 * i + 1]);
-        peak = std::max(peak, std::abs(int(buf[i])));
+// one block as `channels` interleaved channels (SDL's order: FL FR FC LFE BL BR SL SR); the
+// discrete channels from the DSP when it wrote the block, else the stereo on the front pair
+void compose(const u8* data, u32 frames, int channels, const s16* discrete, std::vector<s16>& out) {
+    out.assign(size_t(frames) * size_t(channels), 0);
+    for (u32 i = 0; i < frames; i++) {
+        s16* o = &out[size_t(i) * size_t(channels)];
+        const s16* d = discrete ? discrete + i * 8 : nullptr;
+        o[0] = d ? d[0] : s16(data[4 * i] << 8 | data[4 * i + 1]);
+        o[1] = d ? d[1] : s16(data[4 * i + 2] << 8 | data[4 * i + 3]);
+        if (!d || channels == 2) continue;
+        if (channels == 6) {
+            o[4] = d[2];
+            o[5] = d[3];
+        } else {
+            o[4] = d[4];
+            o[5] = d[5];
+            o[6] = d[6];
+            o[7] = d[7];
+        }
     }
+}
+
+void push(const u8* data, u32 frames, u32 rate) {
+    int peak = 0;
+    for (u32 i = 0; i < frames * 2; i++) peak = std::max(peak, std::abs(int(s16(data[2 * i] << 8 | data[2 * i + 1]))));
     s_perfBlocks++;
     if (peak > s_perfPeak.load(std::memory_order_relaxed)) s_perfPeak.store(peak, std::memory_order_relaxed);
-    const int bytes = int(frames * 4);
+    if (s_dump && !s_dumpChannels) s_dumpChannels = outputChannels();
+    const s16* discrete =
+        (s_stream && s_channels > 2) || s_dumpChannels > 2 ? musyxDiscreteBlock(data, frames) : nullptr;
+    static std::vector<s16> buf;
     if (s_dump) {
         if (!s_dumpRate) s_dumpRate = rate;
-        fwrite(buf.data(), 1, size_t(bytes), s_dump);
-        s_dumpBytes += u32(bytes);
+        compose(data, frames, s_dumpChannels, discrete, buf);
+        fwrite(buf.data(), 2, buf.size(), s_dump);
+        s_dumpBytes += u32(buf.size() * 2);
         writeWavHeader();
     }
     if (!s_stream) return;
+    compose(data, frames, s_channels, discrete, buf);
+    const int bytes = int(buf.size() * 2);
     if (rate != s_rate) {
-        const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, int(rate)};
+        const SDL_AudioSpec spec{SDL_AUDIO_S16, s_channels, int(rate)};
         SDL_SetAudioStreamFormat(s_stream, &spec, nullptr);
         s_rate = rate;
     }
@@ -215,7 +297,7 @@ void push(const u8* data, u32 frames, u32 rate) {
             SDL_PauseAudioStreamDevice(s_stream);
         }
     }
-    const double bytesPerMs = s_rate * 4 / 1000.0;
+    const double bytesPerMs = s_rate * 2.0 * s_channels / 1000.0;
     const double queuedMs = SDL_GetAudioStreamQueued(s_stream) / bytesPerMs;
     logQueue(queuedMs);
     // Ran dry (a dry stream still reports ~0.2 ms: the resampler's leftovers): one clean gap

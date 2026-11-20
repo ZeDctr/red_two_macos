@@ -21,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "gyro.h"
 #include "hw/gx_fifo.h"
 #include "hotkeys.h"
 #include "runtime.h"
@@ -34,10 +35,13 @@ bool s_ready = false;
 // R2_INPUT="<vblank>:<BUTTON>[*frames],...": scripted presses for automated runs.
 struct Press {
     u64 start, frames;
-    u32 button;  // GameCube buttons; kStick* above them
+    u32 button;  // GameCube buttons; kStick* / kTrig* above them
+    u8 value = 0;  // kTrig*: the analog trigger value
 };
-// script names SUP / SDOWN / SLEFT / SRIGHT: the main stick pushed fully that way
+// script names SUP / SDOWN / SLEFT / SRIGHT: the main stick pushed fully that way; LT<n> / RT<n>:
+// the left / right trigger's analog value n (0-255) without the digital L / R press
 constexpr u32 kStickUp = 1u << 16, kStickDown = 1u << 17, kStickLeft = 1u << 18, kStickRight = 1u << 19;
+constexpr u32 kTrigL = 1u << 20, kTrigR = 1u << 21;
 std::vector<Press> s_script;
 u64 s_vblank = 0;
 
@@ -60,6 +64,8 @@ void parseScript(const char* s) {
         if (*s == '*') frames = strtoull(s + 1, const_cast<char**>(&s), 10);
         for (auto& n : names)
             if (name == n.name) s_script.push_back({start, frames, n.bit});
+        if (name.size() > 2 && (name[0] == 'L' || name[0] == 'R') && name[1] == 'T' && isdigit(u8(name[2])))
+            s_script.push_back({start, frames, name[0] == 'L' ? kTrigL : kTrigR, u8(std::min(255, atoi(name.c_str() + 2)))});
         while (*s == ',') s++;
     }
     logf("input", "%zu scripted presses", s_script.size());
@@ -249,36 +255,352 @@ void logPort1() {  // JoystickAccess held
 // small aiming moves snapped to the axes ("jittery, not smooth": issue #9). It is turned off for
 // every controller (the profile's useDeadzones, once per controller and session) and shapeStick
 // applies the settings instead.
-void disableAuroraDeadzones() {  // JoystickAccess held
-    static std::vector<aurora::input::SourceId> s_done;
-    for (u32 port = 0; port < 4; port++) {
-        const auto src = aurora::pad::port_controller(port);
-        if (!src || std::find(s_done.begin(), s_done.end(), src) != s_done.end()) continue;
-        s_done.push_back(src);
-        const auto target = aurora::pad::ProfileTarget::controller(src);
-        const aurora::pad::Profile* prof = aurora::pad::profile(target);
-        aurora::pad::ProfileSettings s = prof ? prof->settings : aurora::pad::ProfileSettings{};
-        if (!s.useDeadzones) continue;
-        s.useDeadzones = false;
-        if (!aurora::pad::set_settings(target, s)) logf("input", "port %u: Aurora's stick deadzone could not be turned off", port + 1);
+// Triggers: Aurora presses the digital L / R (the GameCube trigger's click) at the profile's
+// trigger threshold (95% of the travel). A trigger rebound in the Controls page before 1.1 bound
+// the click to the trigger's axis at the default threshold (0.5): full boost / brake from half
+// travel on ("only full-press boosts and full brakes": issue #6). Such bindings get the
+// profile's threshold here; the menu binds new ones with it (menu.cpp bindRow).
+// s_curveTriggers: the port's controller has emulated triggers (not a GameCube adapter's).
+bool s_curveTriggers[4] = {};
+std::vector<aurora::input::SourceId> s_setUp;  // controllers set up this session
+// --- the triggers' clicks on the bumpers (settings bumper_clicks) ---------------------------------
+// What players set up in Dolphin for this game (issue #6): a trigger pulled all the way clicks -
+// full boost, which closes the S-foils (no firing), or full brake - easy to do by accident on a
+// trigger with no click to feel. With the option the triggers are analog only, over their whole
+// travel (curveTrigger), and LB / RB give the clicks (Aurora reads a digital L / R as the full
+// press, 180); Z, on RB by default (a chase camera while held), moves to the right stick click.
+// Done in the controller's bindings, so the Controls page shows them, and undone when the option
+// goes off unless the player changed them since. L / R without bindings of their own are read
+// from the triggers past the profile's threshold (Aurora's emulated triggers).
+using aurora::binding::Binding;
+using PhysIn = aurora::binding::PhysicalInput;
+bool s_bumperClicks[4];  // per port: the clicks are on the bumpers (the triggers' whole travel is analog)
+
+Binding buttonBinding(SDL_GamepadButton b) {
+    Binding x;
+    x.input.control = PhysIn::GamepadButton{b};
+    return x;
+}
+bool onlyButton(const std::vector<Binding>& list, SDL_GamepadButton b) {
+    if (list.size() != 1) return false;
+    const auto* gb = list[0].input.control.get_if<PhysIn::GamepadButton>();
+    return gb && gb->button == b;
+}
+
+void placeClicks(aurora::pad::ProfileTarget target, bool bumpers, u32 port) {
+    const auto& c = aurora::pad::controls();
+    const auto l = aurora::pad::bindings_for_control(target, c.l), r = aurora::pad::bindings_for_control(target, c.r);
+    auto z = aurora::pad::bindings_for_control(target, c.z);
+    if (bumpers) {
+        if (onlyButton(l, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && onlyButton(r, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) return;
+        aurora::pad::set_binding(target, c.l, {buttonBinding(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)});
+        aurora::pad::set_binding(target, c.r, {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)});
+        const auto onRb = [](const Binding& b) {
+            const auto* gb = b.input.control.get_if<PhysIn::GamepadButton>();
+            return gb && gb->button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+        };
+        if (std::erase_if(z, onRb)) {
+            if (z.empty()) z.push_back(buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
+            aurora::pad::set_binding(target, c.z, std::move(z));
+        }
+        logf("input", "port %u: the triggers' clicks on LB / RB, Z on the right stick click", port + 1);
+    } else if (onlyButton(l, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && onlyButton(r, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
+        aurora::pad::set_binding(target, c.l, {});  // read from the triggers again
+        aurora::pad::set_binding(target, c.r, {});
+        if (onlyButton(z, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
+            aurora::pad::set_binding(target, c.z, {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)});
+        logf("input", "port %u: the triggers' clicks back on the triggers, Z on RB", port + 1);
     }
 }
 
-void shapeStickS8(s8& x, s8& y, bool mainStick) {
-    float fx = float(x) / 127.f, fy = float(y) / 127.f;
-    shapeStick(fx, fy, mainStick);
-    x = s8(std::lround(fx * 127.f));
-    y = s8(std::lround(fy * 127.f));
+void setUpControllers() {  // JoystickAccess held
+    auto& s_done = s_setUp;
+    // the option changed: every controller is set up again
+    static int s_bumpersApplied = -1;
+    const bool bumpers = settings::get().bumperClicks;
+    if (int(bumpers) != s_bumpersApplied) {
+        s_bumpersApplied = int(bumpers);
+        s_done.clear();
+    }
+    for (u32 port = 0; port < 4; port++) {
+        const auto src = aurora::pad::port_controller(port);
+        const auto target = aurora::pad::ProfileTarget::controller(src);
+        const aurora::pad::Profile* prof = src ? aurora::pad::profile(target) : nullptr;
+        s_curveTriggers[port] = prof && prof->settings.emulateTriggers;
+        s_bumperClicks[port] = s_curveTriggers[port] && bumpers;
+        if (!src || std::find(s_done.begin(), s_done.end(), src) != s_done.end()) continue;
+        s_done.push_back(src);
+        aurora::pad::ProfileSettings s = prof ? prof->settings : aurora::pad::ProfileSettings{};
+        if (s.useDeadzones) {
+            s.useDeadzones = false;
+            if (!aurora::pad::set_settings(target, s)) logf("input", "port %u: Aurora's stick deadzone could not be turned off", port + 1);
+        }
+        const auto& c = aurora::pad::controls();
+        for (const bool left : {true, false}) {
+            const float threshold = left ? s.leftTriggerThreshold : s.rightTriggerThreshold;
+            auto list = aurora::pad::bindings_for_control(target, left ? c.l : c.r);
+            bool changed = false;
+            for (auto& b : list)
+                if (const auto* ax = b.input.control.get_if<aurora::binding::PhysicalInput::GamepadAxis>();
+                    ax && (ax->axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || ax->axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) &&
+                    b.threshold < threshold) {
+                    b.threshold = threshold;
+                    changed = true;
+                }
+            if (changed && aurora::pad::set_binding(target, left ? c.l : c.r, std::move(list)))
+                logf("input", "port %u: the %s trigger's click moved to %.0f%% of its travel (was a rebind at half)", port + 1,
+                     left ? "left" : "right", threshold * 100.f);
+        }
+        if (s.emulateTriggers) placeClicks(target, bumpers, port);
+    }
 }
+
+// A controller's analog trigger spread over its travel up to the click. The game takes a trigger
+// through the SDK's PADClamp (values up to 30 read 0, 170 and more full: (v - 30) / 140, measured
+// in flight) as an analog throttle and brake (0x7FC31D30: half a trigger = half throttle, the
+// click adds the boost / full brake). Aurora reports the travel as 0-255, so the throttle was
+// full at 67% and the last quarter before the click did nothing; a GameCube trigger builds up
+// until it clicks. Now 4% of the travel reads 0 and the click's threshold full (170) - or the
+// whole travel when the clicks are on the bumpers (wholeTravel).
+void curveTrigger(u8& v, bool clicked, bool wholeTravel = false) {
+    if (clicked) return;  // Aurora's full press with the click (180)
+    constexpr float kRest = 0.04f, kClick = 31151.f / 32767.f;  // Aurora's trigger threshold
+    const float t = float(v) / 255.f, full = wholeTravel ? 1.f : kClick;
+    v = t <= kRest ? 0 : u8(std::min(170l, std::lround(30.f + (t - kRest) / (full - kRest) * 140.f)));
+}
+
+// R2_TRIGGER_TEST=<seconds> (automated runs, with R2_BG_PADS=1): a virtual gamepad takes port 1
+// with a full right trigger, then holds it at several depths and logs what port 1 gets; then
+// the right trigger's click is bound at half travel (a rebind from before 1.1) and set up again:
+// at 60% the click must stay off.
+void triggerTest(const PADStatus& p1) {  // JoystickAccess held
+    static const double start = getenv("R2_TRIGGER_TEST") ? atof(getenv("R2_TRIGGER_TEST")) : -1.0;
+    if (start < 0) return;
+    static const auto t0 = std::chrono::steady_clock::now();
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - start;
+    static SDL_Joystick* joy = nullptr;
+    static SDL_JoystickID id = 0;
+    static int step = -1;
+    constexpr int kSteps = 14, kRebind = 9;
+    if (t < 0 || step >= kSteps) return;
+    if (!joy) {
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "Red Two trigger test pad";
+        id = SDL_AttachVirtualJoystick(&desc);
+        joy = id ? SDL_OpenJoystick(id) : nullptr;
+        logf("input", "trigger test: virtual gamepad %s", joy ? "attached" : SDL_GetError());
+        if (!joy) step = 99;
+        return;
+    }
+    // every 0.5 s from 1 s on: set the trigger, and log what port 1 got from the previous one
+    static const float depth[kSteps] = {1.f, 0.f, 0.02f, 0.25f, 0.5f, 0.75f, 0.9f, 0.94f, 0.97f, 0.f, 0.f, 0.6f, 0.97f, 0.f};
+    const int now = int((t - 1.0) / 0.5);
+    if (now <= step || now < 0) return;
+    if (step >= 0)
+        logf("input", "trigger test: right trigger at %3.0f%%: port 1 trigger R %3u, R click %d", depth[step] * 100.f,
+             p1.triggerRight, int((p1.button & PAD_TRIGGER_R) != 0));
+    step = now;
+    if (step >= kSteps) return;
+    if (step == kRebind) {  // an old rebind: the click on the trigger's axis at half travel
+        const auto src = aurora::pad::port_controller(0);
+        const auto target = aurora::pad::ProfileTarget::controller(src);
+        aurora::binding::Binding b;
+        b.input.control = aurora::binding::PhysicalInput::GamepadAxis{SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,
+                                                                       aurora::binding::PhysicalInput::GamepadAxis::Direction::Positive};
+        const bool ok = aurora::pad::set_binding(target, aurora::pad::controls().r, {b});
+        std::erase(s_setUp, src);  // set up again at the next poll
+        logf("input", "trigger test: R click bound at half travel (%s), controller %llu", ok ? "ok" : "failed",
+             (unsigned long long)src);
+    }
+    // (a virtual joystick's trigger axis spans -32768 (released) to 32767)
+    SDL_SetJoystickVirtualAxis(joy, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, Sint16(std::lround(-32768.0 + depth[step] * 65535.0)));
+}
+
+// R2_BUMPER_TEST=<seconds> (automated runs, with R2_BG_PADS=1 and bumper_clicks=1): a virtual
+// gamepad takes port 1; every 0.5 s from 1 s on one step (the right trigger, LB, RB, the right stick
+// click), port 1's L / R / Z and triggers logged for each; halfway the option goes off (the clicks
+// back on the triggers, Z on RB) and the same steps run again.
+void bumperTest(const PADStatus& p1) {  // JoystickAccess held
+    static const double start = getenv("R2_BUMPER_TEST") ? atof(getenv("R2_BUMPER_TEST")) : -1.0;
+    if (start < 0) return;
+    static const auto t0 = std::chrono::steady_clock::now();
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - start;
+    static SDL_Joystick* joy = nullptr;
+    static int step = -1;
+    struct Step {
+        const char* what;
+        float rt;
+        int button;  // SDL_GamepadButton held, -1 none
+    };
+    static const Step kSteps[] = {
+        {"nothing", 0.f, -1},
+        {"right trigger 50%", 0.5f, -1},
+        {"right trigger 100%", 1.f, -1},
+        {"RB", 0.f, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
+        {"LB", 0.f, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER},
+        {"right stick click", 0.f, SDL_GAMEPAD_BUTTON_RIGHT_STICK},
+        {"nothing", 0.f, -1},
+    };
+    constexpr int kN = int(std::size(kSteps));
+    if (t < 0 || step >= 2 * kN) return;
+    if (!joy) {
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "Red Two bumper test pad";
+        const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+        joy = id ? SDL_OpenJoystick(id) : nullptr;
+        logf("input", "bumper test: virtual gamepad %s", joy ? "attached" : SDL_GetError());
+        if (!joy) step = 99;
+        return;
+    }
+    const int now = int((t - 1.0) / 0.5);
+    if (now <= step || now < 0) return;
+    if (step >= 0)
+        logf("input", "bumper test (option %s): %-18s -> L %d R %d Z %d, triggers %3u %3u", step < kN ? "on" : "off",
+             kSteps[step % kN].what, int((p1.button & PAD_TRIGGER_L) != 0), int((p1.button & PAD_TRIGGER_R) != 0),
+             int((p1.button & PAD_TRIGGER_Z) != 0), p1.triggerLeft, p1.triggerRight);
+    step = now;
+    if (step >= 2 * kN) return;
+    if (step == kN) {
+        settings::get().bumperClicks = false;
+        logf("input", "bumper test: option off");
+    }
+    const Step& s = kSteps[step % kN];
+    for (int b : {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_RIGHT_STICK})
+        SDL_SetJoystickVirtualButton(joy, b, b == s.button);
+    SDL_SetJoystickVirtualAxis(joy, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, Sint16(std::lround(-32768.0 + s.rt * 65535.0)));
+}
+
+// R2_STICK_TEST=<seconds> (automated runs, with R2_BG_PADS=1; R2_GYRO_LOG=1 logs the craft's
+// turn rate meanwhile): a virtual gamepad takes port 1 and holds its left stick right at several
+// deflections, 3 s each; what port 1 got and the turn rate expected are logged for each.
+void stickTest(const PADStatus& p1) {  // JoystickAccess held
+    static const double start = getenv("R2_STICK_TEST") ? atof(getenv("R2_STICK_TEST")) : -1.0;
+    if (start < 0) return;
+    static const auto t0 = std::chrono::steady_clock::now();
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - start;
+    static SDL_Joystick* joy = nullptr;
+    static int step = -1;
+    static const float kDefl[] = {0.f, 0.2f, 0.35f, 0.5f, 0.65f, 0.8f, 0.9f, 1.f, 0.f};
+    constexpr int kN = int(std::size(kDefl));
+    if (step >= kN) return;
+    if (!joy) {
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.name = "Red Two stick test pad";
+        const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+        joy = id ? SDL_OpenJoystick(id) : nullptr;
+        logf("input", "stick test: virtual gamepad %s", joy ? "attached" : SDL_GetError());
+        if (!joy) step = 99;
+        return;
+    }
+    if (t < 0) return;
+    const int now = int(t / 3.0);
+    if (now <= step) return;
+    if (step >= 0) {
+        s8 rx = 0, ry = 0;
+        float rate = 0.f;
+        mainStickToGame(kDefl[step], 0.f, rx, ry, &rate);
+        logf("input", "stick test (%s): stick %3.0f%% -> port 1 x %d, turn rate expected %3.0f%%",
+             settings::stickCurveName(settings::get().stickCurve), kDefl[step] * 100.f, p1.stickX, rate * 100.f);
+    }
+    step = now;
+    if (step < kN) SDL_SetJoystickVirtualAxis(joy, SDL_GAMEPAD_AXIS_LEFTX, Sint16(std::lround(kDefl[step] * 32767.f)));
+}
+
 }  // namespace
+
+// --- the control stick as the game takes it (issues #9, #20: "small movements barely do anything,
+// then a sudden jump") ---
+// The game's PADClamp (the SDK's, ClampRegion r13-0x51C0) takes 15 units off each axis and limits
+// the stick to an octagon of 72 (40 each on the diagonal), and in flight the craft turns and
+// pitches at half the stick's fraction up to 80% of it, then three times as steep to its maximum
+// (measured for gyro.cpp: X-wing, Death Star Attack, both axes). Aurora reports a controller's
+// travel as -127..127: on top of the settings' deadzone the clamp's 15 left the first quarter of
+// the travel dead, 87 was full at 73% of it, and the game's steep last fifth - 40% to 100% of the
+// turn rate - was a tenth of the stick's travel. Now the travel past the deadzone is the game's
+// range (15 put back in front, full at full), and the rate follows the stick by settings
+// stick_curve: Smooth (deflection^1.5), Linear, or the game's own curve (GameCube).
+constexpr int kStickDead = 15, kStickMax = 72, kStickXY = 40;
+constexpr int kSubMax = 59, kSubXY = 31;  // the C-stick's (the SDK's ClampRegion, read from the game's copy)
+float gameStickResponse(float g) {  // the craft's rate (fraction of its maximum) for a stick fraction
+    const float a = std::min(std::fabs(g), 1.f);
+    return std::copysign(a <= 0.8f ? a * 0.5f : 0.4f + (a - 0.8f) * 3.f, g);
+}
+float gameStickInverse(float r) {
+    const float a = std::min(std::fabs(r), 1.f);
+    return std::copysign(a <= 0.4f ? a * 2.f : 0.8f + (a - 0.4f) / 3.f, r);
+}
+void gameStickClamp(int& x, int& y, int max = kStickMax, int xy = kStickXY) {  // the SDK's ClampStick
+    const int sx = x < 0 ? -1 : 1, sy = y < 0 ? -1 : 1;
+    x = std::abs(x) <= kStickDead ? 0 : std::abs(x) - kStickDead;
+    y = std::abs(y) <= kStickDead ? 0 : std::abs(y) - kStickDead;
+    if (x == 0 && y == 0) return;
+    const int d = y <= x ? xy * x + (max - xy) * y : xy * y + (max - xy) * x;
+    if (xy * max < d) {
+        x = xy * max * x / d;
+        y = xy * max * y / d;
+    }
+    x *= sx;
+    y *= sy;
+}
+
+// a fraction of a stick's range (-1..1) as a raw value: the clamp's 15 in front, full at full
+s8 stickRaw(float v, int max) {
+    const int u = int(std::lround(std::fabs(v) * float(max)));
+    return u ? s8(v < 0 ? -(kStickDead + u) : kStickDead + u) : 0;
+}
+
+void cStickToGame(float x, float y, s8& rawX, s8& rawY, float* gameX, float* gameY) {
+    shapeStick(x, y, false);  // its deadzone and sensitivity
+    rawX = stickRaw(x, kSubMax);
+    rawY = stickRaw(y, kSubMax);
+    if (gameX || gameY) {
+        int cx = rawX, cy = rawY;
+        gameStickClamp(cx, cy, kSubMax, kSubXY);
+        if (gameX) *gameX = float(cx) / float(kSubMax);
+        if (gameY) *gameY = float(cy) / float(kSubMax);
+    }
+}
+
+void mainStickToGame(float x, float y, s8& rawX, s8& rawY, float* rateX, float* rateY) {
+    shapeStick(x, y, true);  // deadzone and sensitivity
+    const float m = std::min(1.f, std::sqrt(x * x + y * y));
+    float g[2] = {0.f, 0.f};
+    if (m > 0.f) {
+        const auto curve = settings::get().stickCurve;
+        const float target = curve == settings::StickCurve::Smooth ? std::pow(m, 1.5f) : m;
+        const float n = std::sqrt(x * x + y * y);
+        const float t[2] = {x / n * target, y / n * target};
+        for (int i = 0; i < 2; i++) g[i] = curve == settings::StickCurve::GameCube ? t[i] : gameStickInverse(t[i]);
+    }
+    rawX = stickRaw(g[0], kStickMax);
+    rawY = stickRaw(g[1], kStickMax);
+    if (rateX || rateY) {
+        int cx = rawX, cy = rawY;
+        gameStickClamp(cx, cy);
+        if (rateX) *rateX = gameStickResponse(float(cx) / float(kStickMax));
+        if (rateY) *rateY = gameStickResponse(float(cy) / float(kStickMax));
+    }
+}
 
 // A round deadzone (settings stick_deadzone) the output rescales from, so it starts at 0 at the
 // deadzone's edge and keeps its direction, then the control stick's sensitivity; x, y in -1..1
 // (a keyboard's diagonal reaches past 1: it stays full on both axes).
 void shapeStick(float& x, float& y, bool mainStick) {
     const auto& s = settings::get();
-    const float dz = float(std::clamp(s.stickDeadzone, 0, 50)) / 100.f;
-    const float sens = mainStick ? float(std::clamp(s.stickSensitivity, 25, 200)) / 100.f : 1.f;
+    const float dz = float(std::clamp(mainStick ? s.stickDeadzone : s.cStickDeadzone, 0, 50)) / 100.f;
+    const float sens = float(std::clamp(mainStick ? s.stickSensitivity : s.cStickSensitivity, 25, 200)) / 100.f;
     const float m = std::sqrt(x * x + y * y);
     if (m <= dz || m <= 0.f) {
         x = y = 0.f;
@@ -321,6 +643,7 @@ void init(bool pads) {
             .onEvent = [](const aurora::input::InputEvent&, void*) { return aurora::input::EventResult::Pass; },
             .pointerMode = [](void*) { return aurora::input::PointerMode::AutoHide; },
         });
+        gyro::init();
         std::thread(joystickThread).detach();
         scanTest();
     }
@@ -334,28 +657,84 @@ void rumble(int chan, u32 cmd) {
     if (JoystickAccess joy; joy) applyRumble();  // else at the next poll
 }
 
+namespace {
+PADStatus s_port1Game{};  // port 1 as the last poll shaped it (the trigger meter)
+u64 s_port1Tb = 0;
+
+void curvePort(PADStatus& e, int i) {
+    if (!s_curveTriggers[i]) return;
+    curveTrigger(e.triggerLeft, e.button & PAD_TRIGGER_L, s_bumperClicks[i]);
+    curveTrigger(e.triggerRight, e.button & PAD_TRIGGER_R, s_bumperClicks[i]);
+}
+}  // namespace
+
+int port1Triggers(TriggerView& v) {
+    if (!s_ready || !s_pads) return 0;
+    JoystickAccess joy;
+    if (!joy) return -1;
+    const auto src = aurora::pad::port_controller(0);
+    SDL_Gamepad* g = src ? SDL_GetGamepadFromID(aurora::input::gamepad_for_source(src)) : nullptr;
+    if (!g) return 0;
+    PADStatus p = s_port1Game;
+    if (!s_port1Tb || tbNow() - s_port1Tb > kTbClock / 10) {  // no game reading the pads (the launcher)
+        setUpControllers();
+        PADStatus st[PAD_CHANMAX] = {};
+        PADRead(st);
+        curvePort(st[0], 0);
+        p = st[0];
+    }
+    const aurora::pad::Profile* prof = aurora::pad::profile(aurora::pad::ProfileTarget::controller(src));
+    for (int i = 0; i < 2; i++) {
+        v.travel[i] = float(SDL_GetGamepadAxis(g, i ? SDL_GAMEPAD_AXIS_RIGHT_TRIGGER : SDL_GAMEPAD_AXIS_LEFT_TRIGGER)) / 32767.f;
+        v.analog[i] = i ? p.triggerRight : p.triggerLeft;
+        v.click[i] = p.button & (i ? PAD_TRIGGER_R : PAD_TRIGGER_L);
+        v.clickAt[i] = !prof || !prof->settings.emulateTriggers || s_bumperClicks[0] ? 0.f
+                       : i ? prof->settings.rightTriggerThreshold : prof->settings.leftTriggerThreshold;
+    }
+    return 1;
+}
+
 void poll() {
     if (!s_ready) return;
     s_vblank++;
     PADStatus st[PAD_CHANMAX] = {};
+    // the sticks' deadzone and sensitivity (settings) and the triggers' travel, then gyro aiming
+    // on port 1's main stick (its own scale: not through the thumb's deadzone and sensitivity)
+    auto shape = [&st] {
+        for (int i = 0; i < PAD_CHANMAX; i++)
+            if (auto& e = st[i]; e.err == PAD_ERR_NONE) {
+                mainStickToGame(float(e.stickX) / 127.f, float(e.stickY) / 127.f, e.stickX, e.stickY);
+                cStickToGame(float(e.substickX) / 127.f, float(e.substickY) / 127.f, e.substickX, e.substickY);
+                curvePort(e, i);
+            }
+        s_port1Game = st[0];
+        s_port1Tb = tbNow();
+    };
     if (!s_pads) {
         for (auto& e : st) e.err = PAD_ERR_NO_CONTROLLER;
     } else if (JoystickAccess joy; joy) {
         followActiveController();
         logPort1();
-        disableAuroraDeadzones();
+        setUpControllers();
         PADRead(st);
+        if (s_curveTriggers[0] && st[0].err == PAD_ERR_NONE) {  // (the test's log: after the curve)
+            PADStatus p1 = st[0];
+            curveTrigger(p1.triggerRight, p1.button & PAD_TRIGGER_R);
+            triggerTest(p1);
+        } else {
+            triggerTest(st[0]);
+        }
         memcpy(s_lastPads, st, sizeof st);
         applyRumble();
+        shape();
+        bumperTest(st[0]);
+        stickTest(st[0]);
+        gyro::apply(st[0], true);
     } else {
         memcpy(st, s_lastPads, sizeof st);
+        shape();
+        gyro::apply(st[0], false);
     }
-    if (s_pads)  // deadzone and sensitivity (settings)
-        for (auto& e : st)
-            if (e.err == PAD_ERR_NONE) {
-                shapeStickS8(e.stickX, e.stickY, true);
-                shapeStickS8(e.substickX, e.substickY, false);
-            }
     // a hotkey's modifier (Back) is down, or a hotkey just fired: its buttons are not the game's
     if (hotkeys::muteGame())
         for (auto& e : st) {
@@ -369,11 +748,18 @@ void poll() {
     static double scriptTime = 0;
     scriptTime += (60000.0 / 1001.0) / viRate();
     const u64 t = u64(scriptTime);
+    u8 trigL = 0, trigR = 0;
     for (auto& p : s_script)
-        if (t >= p.start && t < p.start + p.frames) scripted |= p.button;
+        if (t >= p.start && t < p.start + p.frames) {
+            scripted |= p.button;
+            if (p.button == kTrigL) trigL = std::max(trigL, p.value);
+            if (p.button == kTrigR) trigR = std::max(trigR, p.value);
+        }
     if (scripted) {
         st[0].err = PAD_ERR_NONE;
         st[0].button |= u16(scripted);
+        if (scripted & kTrigL) st[0].triggerLeft = trigL;
+        if (scripted & kTrigR) st[0].triggerRight = trigR;
         if (scripted & kStickUp) st[0].stickY = 127;
         if (scripted & kStickDown) st[0].stickY = -127;
         if (scripted & kStickLeft) st[0].stickX = -127;
