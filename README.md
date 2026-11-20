@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="res/macos_icon.png" width="220" alt="Red Two macOS Icon">
+</p>
+
 # Red Two (macOS Apple Silicon / Metal Port)
 
 A native **macOS (Apple Silicon / Metal)** port of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), forked from [gminustwo/red_two](https://github.com/gminustwo/red_two) with additional quality-of-life enhancements.
@@ -50,3 +54,12 @@ build/macos/red_two --disc "<your Rogue Leader.rvz>"
 ## Credits
 
 Based on [gminustwo/red_two](https://github.com/gminustwo/red_two) and [Aurora](https://github.com/dolphin-emu/aurora). See the upstream repository for technical details on the static recompilation architecture and Windows/Linux builds.
+
+## Legal
+
+Red Two is released under the [MIT License](LICENSE). It covers this repository's own code
+only, not the game's code that a build (and the prebuilt downloads) contain in recompiled form.
+
+This repository contains no code or assets from the game. Star Wars and Rogue Leader are
+trademarks of Lucasfilm Ltd.; GameCube is a trademark of Nintendo. This project is not
+affiliated with or endorsed by them.
