@@ -22,6 +22,7 @@
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <aurora/aurora.h>
+#include <aurora/gfx.h>
 #include <aurora/input.hpp>
 #include <aurora/pad.hpp>
 #include <dolphin/gx/GXAurora.h>
@@ -235,14 +236,19 @@ bool s_usingPad = false; // the last input came from a controller (button hints)
 // pressed since the menu opened, else port 1's
 SDL_GamepadType s_padType = SDL_GAMEPAD_TYPE_UNKNOWN;
 bool s_padPsPressed = false;
-const char* padName(const char* xbox, const char* ps) { return input::isPlayStation(s_padType) ? ps : xbox; }
+const char* padName(const char* xbox, const char* ps, const char* sw = nullptr) {
+    if (input::isPlayStation(s_padType)) return ps;
+    if (sw && input::isNintendoSwitch(s_padType)) return sw;
+    return xbox;
+}
 const char* padBackName(bool upper = true) {  // the Back button's name on the controller
     return s_padType == SDL_GAMEPAD_TYPE_PS5 ? (upper ? "CREATE" : "Create")
          : s_padType == SDL_GAMEPAD_TYPE_PS4 ? (upper ? "SHARE" : "Share")
          : s_padType == SDL_GAMEPAD_TYPE_PS3 ? (upper ? "SELECT" : "Select")
-                                             : (upper ? "BACK" : "Back");
+         : input::isNintendoSwitch(s_padType) ? (upper ? "MINUS" : "Minus")
+                                              : (upper ? "BACK" : "Back");
 }
-const char* padStartName() { return padName("START", s_padType == SDL_GAMEPAD_TYPE_PS3 ? "START" : "OPTIONS"); }
+const char* padStartName() { return padName("START", s_padType == SDL_GAMEPAD_TYPE_PS3 ? "START" : "OPTIONS", "PLUS"); }
 // this frame's press is a new one, not the repeat of a held direction: ON / OFF switches take
 // only these (a held d-pad / stick / arrow key repeats every 0.09 s, and on a switch row it
 // flipped the setting back and forth - the user's log: fast_disc 22 times in 1.4 s)
@@ -1171,6 +1177,9 @@ void pageDisplay(settings::Settings& s) {
     heading("PERFORMANCE");
     if (fpsRow("Frame rate", s.fps, "Above 60 the game runs more frames per second at its normal speed."))
         s_changed = s_display = true;
+    if (toggleRow("V-Sync", s.vsync,
+                  "Synchronizes frame presentation with your display's refresh rate to prevent screen tearing during fast motion."))
+        s_changed = s_display = true;
     if (toggleRow("Show frame rate", s.showFps, "Frames per second in the top-left corner.")) s_changed = true;
     if (toggleRow("Prepare shaders at start", s.precompileShaders,
                   s_launcher ? "Before the game starts, compiles every shader it has used on this device (PREPARING "
@@ -1193,7 +1202,7 @@ void pageGameplay(settings::Settings& s) {
     heading("CINEMATICS");
     if (toggleRow("Skip intro logos", s.skipLogos, "Reach the title screen in seconds.")) s_changed = true;
     if (toggleRow("Skippable cutscenes", s.skipCutscenes,
-                  "Press B during the opening crawl or a cutscene to skip to the gameplay."))
+                  "Hold B for 2 seconds during the opening crawl or a cutscene to skip to the gameplay."))
         s_changed = true;
 }
 
@@ -2213,8 +2222,9 @@ void pageControls() {
         settings::Settings& st = settings::get();
         const bool sel = rowBegin("Button prompts", "The buttons the game shows in its prompts (the button each GameCube "
                                                     "button is bound to): Automatic shows PlayStation symbols with a "
-                                                    "PlayStation controller and Xbox buttons otherwise; or the original GameCube ones.");
-        static const char* const kNames[] = {"AUTOMATIC", "XBOX", "PLAYSTATION", "GAMECUBE"};
+                                                    "PlayStation controller, Switch buttons with a Nintendo Switch "
+                                                    "controller, and Xbox buttons otherwise; or the original GameCube ones.");
+        static const char* const kNames[] = {"AUTOMATIC", "XBOX", "PLAYSTATION", "SWITCH", "GAMECUBE"};
         constexpr int n = int(settings::ButtonPrompts::Count);
         static_assert(std::size(kNames) == n);
         const int cur = int(st.buttonPrompts);
@@ -2333,9 +2343,9 @@ void pageControls() {
         const std::string text = capturing ? std::string("HOLD, THEN LET GO...")
                                            : hotkeys::label(a, s_padDevice);
         const bool idle = !rebindingNow();
-        const std::string padHelp = std::string("Press ") + padName("A", "Cross") +
-                                    " (or click), then hold the buttons together - " + padBackName(false) + " + " + padName("RB", "R1") +
-                                    " - and let go. " + padName("X", "Square") + " or a right-click clears it.";
+        const std::string padHelp = std::string("Press ") + padName("A", "Cross", "B") +
+                                    " (or click), then hold the buttons together - " + padBackName(false) + " + " + padName("RB", "R1", "R") +
+                                    " - and let go. " + padName("X", "Square", "Y") + " or a right-click clears it.";
         const bool pressed = buttonRow(kHotkeyNames[a], text.c_str(),
                                        s_padDevice ? padHelp.c_str()
                                                    : "Press Enter (or click), then hold the keys together and let go. Delete "
@@ -2353,8 +2363,8 @@ void pageControls() {
         const bool capturing = s_captureRow == i || s_pendingCapture == i;
         const std::string text = capturing ? std::string("PRESS A KEY OR BUTTON...") : bindingText(row);
         const bool idle = s_captureRow < 0 && s_pendingCapture < 0 && s_pendingHotkey < 0 && !hotkeys::capturing();
-        const std::string help = std::string("Press ") + padName("A", "Cross") +
-                                 " / Enter (or click), then the new key or button. " + padName("X", "Square") +
+        const std::string help = std::string("Press ") + padName("A", "Cross", "B") +
+                                 " / Enter (or click), then the new key or button. " + padName("X", "Square", "Y") +
                                  " / Delete or a right-click clears it. " + padBackName(false) + " / Esc cancels.";
         const bool pressed = buttonRow(row.name, text.c_str(), help.c_str(), capturing ? kGold : kText);
         const bool sel = s_rowSel[s_section] == s_row - 1;
@@ -2427,9 +2437,9 @@ void tabBar() {
                  on ? kGold : (hot ? kText : kDim), kSectionNames[i], tr, on ? alpha(kAmber, 40) : 0);
     }
     const float cy = p.y + h * 0.5f;
-    keyCap(dl, ImVec2(p.x + capW * 0.5f, cy), s_usingPad ? padName("LB", "L1") : "Q",
+    keyCap(dl, ImVec2(p.x + capW * 0.5f, cy), s_usingPad ? padName("LB", "L1", "L") : "Q",
            s_navKey[NavPrevTab].held || ImGui::IsKeyDown(ImGuiKey_Q));
-    keyCap(dl, ImVec2(p.x + avail - capW * 0.5f, cy), s_usingPad ? padName("RB", "R1") : "E",
+    keyCap(dl, ImVec2(p.x + avail - capW * 0.5f, cy), s_usingPad ? padName("RB", "R1", "R") : "E",
            s_navKey[NavNextTab].held || ImGui::IsKeyDown(ImGuiKey_E));
     const float ruleY = p.y + h + 12.f * s_ui;
     dl->AddLine(ImVec2(p.x, ruleY), ImVec2(p.x + avail, ruleY), alpha(kGold, 60), 1.f);
@@ -2518,8 +2528,8 @@ bool drawMenu(settings::Settings& s, float t) {
     const float helpY = footY - 40.f * s_ui;
     bg->AddLine(ImVec2(a.x + pad, helpY - 12.f * s_ui), ImVec2(b.x - pad, helpY - 12.f * s_ui), alpha(kGold, 50), 1.f);
     // (a PlayStation controller's buttons by their names: cross, circle, square, L1 / R1, ...)
-    const std::string accept = padName("A", "CROSS"), back = padName("B", "CIRCLE"), clear = padName("X", "SQUARE");
-    std::string hint = s_usingPad ? std::string(padName("LB / RB", "L1 / R1")) + "  TABS      D-PAD / STICK  MOVE, CHANGE      " + accept + "  SELECT"
+    const std::string accept = padName("A", "CROSS", "B"), back = padName("B", "CIRCLE", "A"), clear = padName("X", "SQUARE", "Y");
+    std::string hint = s_usingPad ? std::string(padName("LB / RB", "L1 / R1", "L / R")) + "  TABS      D-PAD / STICK  MOVE, CHANGE      " + accept + "  SELECT"
                                   : "Q / E  TABS      ARROWS  MOVE, CHANGE      ENTER  SELECT";
     if (s_section == Controls) hint += s_usingPad ? "      " + clear + "  CLEAR" : "      DEL  CLEAR";
     if (s_launcher) hint += s_usingPad ? std::string("      ") + padStartName() + "  LAUNCH" : "";
@@ -2939,6 +2949,8 @@ void toast(const std::string& text) {
 static float s_appliedAspect = 0.f;
 
 static float displayAspect() {
+    // Fullscreen videos (documentary, teaser, film clips) keep their original 4:3 aspect ratio
+    if (movieFullscreenActive()) return 4.f / 3.f;
     const float a = settings::aspectValue(settings::get().aspect);
     if (a > 0.f) return std::min(a, settings::kMaxAspect);
     int w = 0, h = 0;
@@ -2963,6 +2975,7 @@ void applyDisplaySettings() {
     const settings::Settings& s = settings::get();
     VISetFrameBufferScale(settings::resolutionScale(s.resolution));
     applyDisplayAspect();
+    aurora_enable_vsync(s.vsync);
     AuroraSetUberShaders(uberShaderMode());
     AuroraSetForcedAnisotropy(u16(s.anisotropy));  // (Aurora patch 0030)
     // widescreen: letterboxed cinematics fill the screen (4:3 keeps the original bars)
@@ -3153,8 +3166,8 @@ void menuDraw() {
                 const float sepY = by0 + 76.f * ui;
                 fg->AddLine(ImVec2(bx0 + 26.f * ui, sepY), ImVec2(bx0 + boxW - 26.f * ui, sepY), alpha(kGold, 110), 1.f * ui);
 
-                // Selectable rows: Continue (0), End (1)
-                const char* items[2] = {"Continue", "End"};
+                // Selectable rows: Continue (0), Back (1)
+                const char* items[2] = {"Continue", "Back"};
                 const float rowH = 48.f * ui;
                 const float rowPx = 24.f * ui;
                 for (int i = 0; i < 2; i++) {
@@ -3171,6 +3184,122 @@ void menuDraw() {
                     drawText(fg, s_font, rowPx, ImVec2(cx - tw * 0.5f, ry0 + (rowH - rowPx) * 0.5f), col, items[i], 2.f * ui);
                 }
             }
+        }
+        // Cutscene hold-B-to-skip indicator (bottom-right corner)
+        const CutsceneSkipOverlay sk = cutsceneSkipOverlay();
+        if (sk.visible) {
+            const float a = sk.alpha;
+            const float px = 19.f * ui;
+            const char* label = "Hold to Skip";
+            const float labelW = textWidth(s_font, px, label, 1.5f * ui);
+            const float r = 13.f * ui;
+            const float padX = 14.f * ui;
+            const float gap = 12.f * ui;
+            const float boxW = padX + r * 2.f + gap + labelW + padX;
+            const float boxH = 42.f * ui;
+            const float x1 = io.DisplaySize.x - 24.f * ui;
+            const float y1 = io.DisplaySize.y - 22.f * ui;
+            const float x0 = x1 - boxW;
+            const float y0 = y1 - boxH;
+
+            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 8.f * ui,
+                  alpha(IM_COL32(6, 14, 30, 255), int(190 * a)), alpha(IM_COL32(2, 6, 14, 255), int(215 * a)),
+                  alpha(kGold, int((sk.holding ? 230 : 140) * a)), 1.25f * ui);
+
+            const ImVec2 center(x0 + padX + r, y0 + boxH * 0.5f);
+            fg->AddCircle(center, r, IM_COL32(255, 255, 255, int(65 * a)), 32, 2.5f * ui);
+            if (sk.progress > 0.005f) {
+                constexpr float kPi = 3.14159265f;
+                const float a0 = -kPi * 0.5f;
+                const float a1 = a0 + sk.progress * 2.f * kPi;
+                fg->PathClear();
+                fg->PathArcTo(center, r, a0, a1, 32);
+                fg->PathStroke(alpha(kGold, int(255 * a)), 0, 3.2f * ui);
+            }
+            const ImU32 glyphCol = alpha(sk.holding ? kGold : IM_COL32(235, 240, 250, 255), int(255 * a));
+            const char glyph = buttonGlyphForGcB();
+            const float gR = 5.5f * ui;
+            const float gThick = 2.0f * ui;
+            if (glyph == 'x') {
+                fg->AddLine(ImVec2(center.x - gR, center.y - gR), ImVec2(center.x + gR, center.y + gR), glyphCol, gThick);
+                fg->AddLine(ImVec2(center.x + gR, center.y - gR), ImVec2(center.x - gR, center.y + gR), glyphCol, gThick);
+            } else if (glyph == 'o') {
+                fg->AddCircle(center, gR * 1.05f, glyphCol, 24, gThick);
+            } else if (glyph == 's') {
+                fg->AddRect(ImVec2(center.x - gR, center.y - gR), ImVec2(center.x + gR, center.y + gR), glyphCol, 0.f, 0, gThick);
+            } else if (glyph == 't') {
+                fg->AddTriangle(ImVec2(center.x, center.y - gR * 1.15f),
+                                ImVec2(center.x + gR * 1.1f, center.y + gR * 0.85f),
+                                ImVec2(center.x - gR * 1.1f, center.y + gR * 0.85f), glyphCol, gThick);
+            } else {
+                const char txt[2] = {glyph, '\0'};
+                const float bPx = 16.f * ui;
+                const float bW = textWidth(s_font, bPx, txt, 0.f);
+                drawText(fg, s_font, bPx, ImVec2(center.x - bW * 0.5f, center.y - bPx * 0.52f), glyphCol, txt, 0.f);
+            }
+
+            const ImU32 textCol = sk.holding ? alpha(kGold, int(255 * a)) : IM_COL32(220, 230, 245, int(230 * a));
+            drawText(fg, s_font, px, ImVec2(x0 + padX + r * 2.f + gap, y0 + (boxH - px) * 0.5f), textCol, label, 1.5f * ui);
+        }
+        // Audio commentary indicator (bottom-center, persistent while active or paused)
+        const CommentaryOverlay co = commentaryOverlay();
+        if (co.active) {
+            const char* line1 = co.paused ? "AUDIO COMMENTARY PAUSED" : "AUDIO COMMENTARY";
+            const char* line2 = co.paused ? "Press L3 / C to Resume" : "Press L3 / C to Pause";
+            const float px1 = 17.f * ui;
+            const float px2 = 14.f * ui;
+            const float track1 = 2.f * ui;
+            const float track2 = 0.8f * ui;
+            const float w1 = textWidth(s_font, px1, line1, track1);
+            const float w2 = textWidth(s_font, px2, line2, track2);
+            const float padX = 18.f * ui;
+            const float padY = 9.f * ui;
+            const float lineGap = 4.f * ui;
+            const float boxW = std::max(w1, w2) + padX * 2.f;
+            const float boxH = padY + px1 + lineGap + px2 + padY;
+            const float cx = io.DisplaySize.x * 0.5f;
+            const float y1 = io.DisplaySize.y - 20.f * ui;
+            const float y0 = y1 - boxH;
+            const float x0 = cx - boxW * 0.5f;
+            const float x1 = cx + boxW * 0.5f;
+
+            const ImU32 bgTop = co.paused ? IM_COL32(22, 24, 28, 175) : IM_COL32(6, 14, 30, 170);
+            const ImU32 bgBot = co.paused ? IM_COL32(14, 15, 18, 195) : IM_COL32(2, 6, 14, 190);
+            const ImU32 border = co.paused ? IM_COL32(130, 136, 146, 140) : alpha(kGold, 145);
+            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 8.f * ui, bgTop, bgBot, border, 1.25f * ui);
+
+            const ImU32 col1 = co.paused ? IM_COL32(165, 170, 178, 210) : kGold;
+            const ImU32 col2 = co.paused ? IM_COL32(130, 136, 145, 190) : IM_COL32(205, 218, 238, 220);
+            drawText(fg, s_font, px1, ImVec2(cx - w1 * 0.5f, y0 + padY), col1, line1, track1);
+            drawText(fg, s_font, px2, ImVec2(cx - w2 * 0.5f, y0 + padY + px1 + lineGap), col2, line2, track2);
+        }
+        // Art Gallery title & index caption (bottom-center)
+        const ArtGalleryOverlay ag = artGalleryOverlay();
+        if (ag.active && ag.title && *ag.title) {
+            char sub[32];
+            snprintf(sub, sizeof sub, "%d / %d", ag.index + 1, ag.total);
+            const float px1 = 20.f * ui;
+            const float px2 = 14.f * ui;
+            const float track1 = 1.2f * ui;
+            const float track2 = 2.0f * ui;
+            const float w1 = textWidth(s_font, px1, ag.title, track1);
+            const float w2 = textWidth(s_font, px2, sub, track2);
+            const float padX = 22.f * ui;
+            const float padY = 10.f * ui;
+            const float lineGap = 4.f * ui;
+            const float boxW = std::max(w1, w2) + padX * 2.f;
+            const float boxH = padY + px1 + lineGap + px2 + padY;
+            const float cx = io.DisplaySize.x * 0.5f;
+            const float y1 = io.DisplaySize.y - 22.f * ui;
+            const float y0 = y1 - boxH;
+            const float x0 = cx - boxW * 0.5f;
+            const float x1 = cx + boxW * 0.5f;
+
+            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 9.f * ui,
+                  IM_COL32(6, 14, 30, 200), IM_COL32(2, 6, 14, 220), alpha(kGold, 165), 1.25f * ui);
+            drawText(fg, s_font, px1, ImVec2(cx - w1 * 0.5f, y0 + padY), kGold, ag.title, track1);
+            drawText(fg, s_font, px2, ImVec2(cx - w2 * 0.5f, y0 + padY + px1 + lineGap),
+                     IM_COL32(205, 218, 238, 220), sub, track2);
         }
     }
     // save state messages: 2.5 s at the top, fading out
@@ -3238,19 +3367,6 @@ void menuDraw() {
             y = pb.y + 10.f * ui;
             ++it;
         }
-    }
-    if (cinematicSkip()) {
-        const char* text = "SKIPPING";
-        const float px = 34.f * ui;
-        const float tw = textWidth(s_font, px, text, 8.f * ui);
-        const ImVec2 c(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-        const float pulse = 0.6f + 0.4f * std::sin(t * 6.f);
-        drawText(fg, s_font, px, ImVec2(c.x - tw * 0.5f, c.y - px * 0.5f), alpha(kGold, int(255 * pulse)), text, 8.f * ui,
-                 alpha(kAmber, 40));
-        const float bw = tw * 1.2f, y = c.y + px * 0.9f;
-        fg->AddRectFilled(ImVec2(c.x - bw * 0.5f, y), ImVec2(c.x + bw * 0.5f, y + 2.f * ui), alpha(kGold, 60));
-        const float x = c.x - bw * 0.5f + std::fmod(t * 0.8f, 1.f) * bw * 0.8f;
-        fg->AddRectFilled(ImVec2(x, y), ImVec2(x + bw * 0.2f, y + 2.f * ui), kAmber);
     }
     if (s_open && !drawMenu(s, t)) {
         logf("menu", "controller B: close");

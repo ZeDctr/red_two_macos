@@ -97,3 +97,8 @@
 7FCB94E4 MissionMedal            # (mission r3, level r4) that mission's medal byte at least r4 (13/14: always); only the craft code calls it
 7FD8300C MovieUpdate             # (player r3, dt f1) advances a Factor 5 .movie playback accumulator (+0xDC) by dt and decodes the next frame when >= frame period (+0xE0); the documentary/teaser screen (0x7FD71564) passes a fixed 1/60 s constant instead of GameFrameDelta
 7FC06CA8 CardCheckSlot           # (slot r3, autoCreate r4, r5, r6) mounts/checks the memory card and opens the Rogue Leader save file; when autoCreate != 0 and the file is missing (result 7), calls 0x7FC06930(slot, 1) to create it automatically
+7FD6BCF0 MenuSetScreen           # (menuObj r3, screenId r4, initSel r5) switches front-end menu screen
+7FD6C0D4 MainMenuSetup           # (menuObj r3) builds the front-end Main Menu (Start / Options)
+7FD6C23C MainMenuUpdate          # (menuObj r3) handles input on the front-end Main Menu
+7FD6C4A0 OptionsMenuSetup        # (menuObj r3) builds the Options menu (screen 0x06)
+7FD6C86C OptionsMenuUpdate       # (menuObj r3) handles input on the Options menu (screen 0x06)

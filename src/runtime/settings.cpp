@@ -64,6 +64,7 @@ void set(const std::string& key, const std::string& value) {
         else if (n == 5) s.aspect = Aspect::Window;
     }
     else if (key == "fps") { for (int f : kFpsChoices) if (f == n) s.fps = n; }
+    else if (key == "vsync") s.vsync = parseBool(value);
     else if (key == "show_fps") s.showFps = parseBool(value);
     else if (key == "ubershaders") s.ubershaders = parseBool(value);
     else if (key == "precompile_shaders") s.precompileShaders = parseBool(value);
@@ -238,6 +239,7 @@ void save() {
     fprintf(f, "# 0 4:3, 1 16:9, 2 16:10, 3 21:9, 5 match the window (at most 21:9)\n");
     fprintf(f, "aspect=%d\n", s.aspect == Aspect::Window ? 5 : int(s.aspect));
     fprintf(f, "fps=%d\n", s.fps);
+    fprintf(f, "vsync=%d\n", s.vsync);
     fprintf(f, "show_fps=%d\n", s.showFps);
     fprintf(f, "# a generic shader draws objects whose own shader is still compiling (no pop-in)\n");
     fprintf(f, "ubershaders=%d\n", s.ubershaders);
@@ -337,6 +339,7 @@ const char* buttonPromptsName(ButtonPrompts p) {
     switch (p) {
     case ButtonPrompts::Xbox: return "xbox";
     case ButtonPrompts::PlayStation: return "playstation";
+    case ButtonPrompts::Switch: return "switch";
     case ButtonPrompts::GameCube: return "gamecube";
     default: return "auto";
     }

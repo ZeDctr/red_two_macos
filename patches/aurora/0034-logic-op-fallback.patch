@@ -1,0 +1,89 @@
+diff --git a/lib/gx/gx.cpp b/lib/gx/gx.cpp
+index 490de4c..1115360 100644
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -132,18 +132,20 @@ wgpu::BlendState to_blend_state(GXBlendMode mode, GXBlendFactor srcFac, GXBlendF
+     break;
+   case GX_BM_LOGIC:
+     switch (op) {
+-      DEFAULT_FATAL("unsupported logic op {}", underlying(op));
+-    case GX_LO_CLEAR:
++    default:
++      Log.warn("unsupported logic op {}, falling back to copy", underlying(op));
++      [[fallthrough]];
++    case GX_LO_COPY:
+       colorBlendComponent = {
+           .operation = wgpu::BlendOperation::Add,
+-          .srcFactor = wgpu::BlendFactor::Zero,
++          .srcFactor = wgpu::BlendFactor::One,
+           .dstFactor = wgpu::BlendFactor::Zero,
+       };
+       break;
+-    case GX_LO_COPY:
++    case GX_LO_CLEAR:
+       colorBlendComponent = {
+           .operation = wgpu::BlendOperation::Add,
+-          .srcFactor = wgpu::BlendFactor::One,
++          .srcFactor = wgpu::BlendFactor::Zero,
+           .dstFactor = wgpu::BlendFactor::Zero,
+       };
+       break;
+@@ -207,6 +209,7 @@ wgpu::PrimitiveState to_primitive_state(GXCullMode gx_cullMode) {
+   case GX_CULL_BACK:
+     cullMode = wgpu::CullMode::Back;
+     break;
++  case GX_CULL_ALL: // polygon draws are skipped (command_processor.cpp); lines/points draw
+   case GX_CULL_NONE:
+     break;
+   }
+@@ -294,7 +297,8 @@ gfx::ClipRect map_logical_scissor(const gfx::ClipRect& logicalScissor) noexcept
+ 
+ void set_logical_viewport(const gfx::Viewport& viewport) noexcept {
+   if (viewport.left != g_gxState.logicalViewport.left || viewport.width != g_gxState.logicalViewport.width ||
+-      viewport.height != g_gxState.logicalViewport.height) {
++      viewport.height != g_gxState.logicalViewport.height || viewport.znear != g_gxState.logicalViewport.znear ||
++      viewport.zfar != g_gxState.logicalViewport.zfar) {
+     g_gxState.dirty |= DirtyUniform;
+   }
+   g_gxState.logicalViewport = viewport;
+@@ -375,6 +379,25 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
+   return g_device.CreateRenderPipeline(&descriptor);
+ }
+ 
++// The konst selectors live in TEV_KSEL registers shared by pairs of stages and keep what the
++// last draw set, so a stage that reads no KONST input still carries one. In the pipeline key
++// that made up to three pipelines of one shader (Rogue Leader: 6,132 cached, 2,123 distinct),
++// and a draw whose variant was not built yet was skipped until it was: objects popped in.
++void normalize_pipeline_config(PipelineConfig& config) noexcept {
++  auto& sc = config.shaderConfig;
++  for (u32 i = 0; i < sc.tevStageCount && i < MaxTevStages; ++i) {
++    auto& stage = sc.tevStages[i];
++    const auto& c = stage.colorPass;
++    const auto& a = stage.alphaPass;
++    if (c.a != GX_CC_KONST && c.b != GX_CC_KONST && c.c != GX_CC_KONST && c.d != GX_CC_KONST) {
++      stage.kcSel = TevStage{}.kcSel;
++    }
++    if (a.a != GX_CA_KONST && a.b != GX_CA_KONST && a.c != GX_CA_KONST && a.d != GX_CA_KONST) {
++      stage.kaSel = TevStage{}.kaSel;
++    }
++  }
++}
++
+ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept {
+   ZoneScoped;
+ 
+@@ -432,12 +455,14 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
+     config.shaderConfig.lineMode = 3;
+   } else {
+     config.shaderConfig.lineMode = 0;
++    config.shaderConfig.zFreeze = g_gxState.zFreeze;
+   }
+   config.shaderConfig.tevSwapTable = g_gxState.tevSwapTable;
+   for (u8 i = 0; i < g_gxState.numTevStages; ++i) {
+     config.shaderConfig.tevStages[i] = g_gxState.tevStages[i];
+   }
+   config.shaderConfig.tevStageCount = g_gxState.numTevStages;
++  normalize_pipeline_config(config);
+   for (u8 i = 0; i < g_gxState.numIndStages; ++i) {
+     config.shaderConfig.indStages[i] = g_gxState.indStages[i];
+   }

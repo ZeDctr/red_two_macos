@@ -1,16 +1,48 @@
-# Red Two
+# Red Two (macOS Apple Silicon / Metal Port)
 
-[![release](https://img.shields.io/github/v/release/gminustwo/red_two?filter=v%2A&sort=semver&display_name=tag&label=release&color=orange)](https://github.com/gminustwo/red_two/releases/latest)
-[![downloads](https://img.shields.io/github/downloads/gminustwo/red_two/total?label=downloads&color=brightgreen)](https://github.com/gminustwo/red_two/releases)
-
-A static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube) for PC.
+A static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube) for **macOS (Apple Silicon / Metal)**, Windows, and Linux — forked from [gminustwo/red_two](https://github.com/gminustwo/red_two) with native macOS support and quality-of-life enhancements.
 
 The game's own PowerPC code is translated to C++ ahead of time and runs on a native runtime
-that stands in for the console's hardware. **No game data is included**: you need your own disc
-image of the USA release (`GSWE64`, revision 0), for the downloads as for your own build.
+that stands in for the console's hardware. **No game data or texture packs are included**: you need
+your own disc image of the USA release (`GSWE64`, revision 0), for both the `.app` download and your
+own build.
 
-**Downloads**: Windows (zip) and Linux / Steam Deck (AppImage) builds are on the
-[Releases](../../releases) page. They contain the game's code in recompiled form, none of its data:
+## macOS (Apple Silicon)
+
+### Quick Start (Release `.app`)
+1. Download `Red_Two_macOS_arm64.zip` from the [Releases](../../releases) page and unzip `Red Two.app`.
+2. Right-click → **Open** (first launch only, since the bundle is ad-hoc signed).
+3. Select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
+4. Optional: copy a Dolphin HD texture pack (`GSWE64` folder) into `~/Library/Application Support/Red Two/textures/` or pick its folder under **F1 → MODS → Texture pack folder**.
+
+### Building on macOS (Apple Silicon)
+
+Requirements: Xcode Command Line Tools (`clang`), Homebrew (`cmake`, `ninja`, `sdl3`, `libpng`, `freetype`, `zstd`, `xxhash`, `fmt`, `abseil`).
+
+```bash
+# 1. Build: recompiles the game straight from your disc image (RVZ, WIA, ISO or GCM)
+tools/build_macos.sh --disc "<your Rogue Leader.rvz>"
+
+# 2. Run
+build/macos/red_two --disc "<your Rogue Leader.rvz>"
+```
+
+Settings, saves, save states, logs, shader cache, and texture packs live in `~/Library/Application Support/Red Two/`.
+
+### macOS & QoL Enhancements in this Fork
+- **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, including Aurora shader logic-op fallback (`patches/aurora/0034-logic-op-fallback.patch`).
+- **Standalone macOS `.app` bundle** with bundled dylibs, custom weathered Rogue Squadron icon, and `LSSupportsGameMode` / macOS Fullscreen Spaces support.
+- **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and Pause menu (**Continue** / **Back**).
+- **Audio Commentary Controls**: press **L3** or **C** to pause/resume active MusyX commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
+- **Art Gallery Captions**: bottom-center title and slide counter (`1 / 27`) overlay for all 27 concept art pieces and renders.
+- **Nintendo Switch Pro Controller** auto-detection & button prompts (`SWITCH`), plus a generic Right Analog Stick icon replacing the baked GameCube C-stick in *Select Craft*.
+- **Streamlined Front-End Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu with consistent Options-style typography and spacing.
+- **Live V-Sync Toggle** in the Display menu, **native instant cutscene skip** via Hold-B (with automatic fast-forward fallback), and instant original exit for *Audio Test* & *Credits*.
+
+---
+
+**Downloads (Upstream)**: Windows (zip) and Linux / Steam Deck (AppImage) builds are on the
+[upstream Releases](https://github.com/gminustwo/red_two/releases) page. They contain the game's code in recompiled form, none of its data:
 start it and choose your disc image (`.iso`, `.gcm`, `.rvz` or `.wia`, wherever it is) on the
 launcher's disc page: type or paste its path, pick it in the file dialog, or find it in the
 built-in browser (controller-friendly). Red Two remembers it; one next to the program is also
@@ -19,7 +51,7 @@ Or build Red Two yourself (below): the build recompiles the game from your disc.
 is portable (everything of yours stays in its `user` folder) and brings the Visual C++ runtime
 with it; it needs a CPU with AVX2 (Intel Haswell / AMD Ryzen or newer) and says so otherwise.
 
-> Status: playable on Windows and Linux (also packaged as an AppImage for the Steam Deck):
+> Status: playable on macOS (Apple Silicon / Metal), Windows, and Linux (Steam Deck AppImage):
 > menus, cutscenes and missions at full speed with graphics (Aurora), sound (an emulation of the
 > MusyX audio DSP), controls, saving, save states, widescreen, mods, cheats and RetroAchievements.
 

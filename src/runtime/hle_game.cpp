@@ -2,6 +2,7 @@
 #include "funcs.h"
 #include "runtime.h"
 #include "gyro.h"
+#include "savestate.h"
 #include "settings.h"
 #include "hw/gx_fifo.h"
 #include "../common/disc_image.h"
@@ -65,6 +66,7 @@ struct MovieOverlayState {
 } s_movieOverlay;
 
 static bool s_moviePaused = false;
+static std::atomic<u64> s_fullscreenMovieTb{0};
 
 void ensureMovieIndex(u32 discStart, u32 totalFrames, u32 firstOff, u32 firstSize) {
     {
@@ -102,6 +104,11 @@ void ensureMovieIndex(u32 discStart, u32 totalFrames, u32 firstOff, u32 firstSiz
 }
 }  // namespace
 
+bool movieFullscreenActive() {
+    const u64 t = s_fullscreenMovieTb.load(std::memory_order_relaxed);
+    return t != 0 && (tbNow() - t) < kTbClock / 4;
+}
+
 MovieOverlay movieOverlay() {
     std::lock_guard lk(s_movieOverlay.mu);
     MovieOverlay out;
@@ -118,11 +125,14 @@ MovieOverlay movieOverlay() {
 }
 
 void hle_MovieUpdate(Ctx& c) {
+    // Fullscreen movie player (documentary / teaser at 0x7FD71568). Note: 0x7FD86250 is the 3D
+    // hologram/quad movie player (e.g. SELECT MISSION briefing carousel), so it keeps widescreen.
     if (c.lr == 0x7FD71568u) {
         const u32 p = c.r[3];
         const u32 hdr = p ? rd32(p + 0x70u) : 0;
         const bool exiting = rd8(c.r[13] + 0xFFFFB590u) != 0;
         if (hdr && rd8(p + 0xE9u) == 0 && !exiting) {
+            s_fullscreenMovieTb.store(tbNow(), std::memory_order_relaxed);
             const double fps = s2d(rd32(hdr + 0x04u));
             const u32 totalFrames = rd32(hdr + 0x0Cu);
             const u32 curFrame = rd32(p + 0xE4u);
@@ -205,13 +215,16 @@ void hle_MovieUpdate(Ctx& c) {
                                 s_movieOverlay.paused = false;
                                 s_movieOverlay.lastActionTb = now;
                             } else {
-                                // Beenden: hand the exit bit back to the game's native exit path
+                                // End: hand the exit bit back to the game's native exit path
                                 s_moviePaused = false;
                                 setAudioSpeed(1.0, false);
                                 if (menuObj) wr8(menuObj + 0x6699u, rawBtn | 0x20u);
-                                std::lock_guard lk(s_movieOverlay.mu);
-                                s_movieOverlay.paused = false;
-                                s_movieOverlay.lastActiveTb = 0;
+                                {
+                                    std::lock_guard lk(s_movieOverlay.mu);
+                                    s_movieOverlay.paused = false;
+                                    s_movieOverlay.lastActiveTb = 0;
+                                }
+                                s_fullscreenMovieTb.store(0, std::memory_order_relaxed);
                                 f_7FD8300C_orig(c);
                                 return;
                             }
@@ -313,6 +326,319 @@ void hle_CardCheckSlot(Ctx& c) {
     f_7FC06CA8_orig(c);
 }
 
+// RAII guest stack frame for HLE hooks that call recompiled guest functions.
+// Never pass a local copy of Ctx to a guest function (a safepoint/interrupt inside poll() saves
+// and resumes the fiber's actual Ctx); instead allocate a 32-byte guest frame on c.r[1] so the
+// callee's `stw r0, 4(r1)` does not overwrite the caller's saved LR.
+struct GuestFrame {
+    Ctx& c;
+    u32 sp, lr;
+    explicit GuestFrame(Ctx& c) : c(c), sp(c.r[1]), lr(c.lr) {
+        wr32(sp - 0x20u, sp);
+        c.r[1] = sp - 0x20u;
+    }
+    ~GuestFrame() {
+        c.r[1] = sp;
+        c.lr = lr;
+    }
+};
+
+// Front-end menu customization:
+// Promote Special Features (0x12), Rogue Leaders (0x07), and Passcodes (0x08) from Options (0x06)
+// into the Main Menu (0x04) in the order: Start, Special Features, Rogue Leaders, Passcodes, Options.
+void hle_MenuSetScreen(Ctx& c) {
+    const u32 menuObj = c.r[3];
+    u32 target = c.r[4] & 0xFFu;
+    u32 initSel = c.r[5] & 0xFFu;
+    if (target == 0x06u) {
+        // Every guest caller targeting Options (0x06) is a sub-screen returning to its old Options slot
+        // (hle_MainMenuUpdate calls f_7FD6BCF0_orig directly when entering Options from the Main Menu).
+        const u32 oldSel = initSel;
+        if (oldSel == 5u || oldSel == 0u || oldSel == 1u) {
+            // Special Features (5), Rogue Leaders (0), Passcodes (1) -> back to Main Menu (0x04)
+            if (rd8(0x7FE1C4A0u) != 0 && rd8(c.r[13] + 0xFFFFB550u) != 0) {
+                GuestFrame gf(c);
+                c.r[3] = 0x7FE1C4A0u;
+                f_7FD57658(c);
+            }
+            target = 0x04u;
+            initSel = oldSel == 5u ? 1u : oldSel == 0u ? 2u : 3u;
+        } else if (oldSel == 2u) {
+            initSel = 0u;  // Game Settings
+        } else if (oldSel == 3u) {
+            initSel = 1u;  // Video Settings
+        } else if (oldSel == 4u) {
+            initSel = 2u;  // Sound Settings
+        }
+    }
+    c.r[3] = menuObj;
+    c.r[4] = target;
+    c.r[5] = initSel;
+    f_7FD6BCF0_orig(c);
+}
+
+void hle_MainMenuSetup(Ctx& c) {
+    GuestFrame gf(c);
+    const u32 menuObj = c.r[3];
+    wr8(menuObj + 0x32u, 1);
+    wr8(menuObj + 0x35u, 0);
+    c.r[3] = 0x58u;
+    c.r[4] = 0x26u;
+    c.r[5] = 0x74u;
+    c.r[6] = 0u;
+    c.f[1] = c.ps1[1] = s2d(rd32(c.r[2] + 0xFFFFCD50u));
+    f_7FD4CE78(c);
+
+    wr8(menuObj + 0x24u, 6);  // 6 items: Start, Special Features, Rogue Leaders, Passcodes, Options, Quit
+    wr32(menuObj + 0x2Cu, rd32(c.r[2] + 0xFFFFCE08u));  // attract demo idle timer
+
+    static constexpr u32 kMainStrings[5] = {
+        0x7FDE3410u,  // FrntEnd_StartScrn_start
+        0x7FDE34E0u,  // FrntEnd_opts_main_specialFeatures
+        0x7FDE3444u,  // FrntEnd_opts_main_rogueLeaders
+        0x7FDE3464u,  // FrntEnd_opts_main_passcodes
+        0x7FDE3428u,  // FrntEnd_StartScrn_options
+    };
+    static constexpr u32 kQuitStringAddr = 0x8F000080u;
+    static constexpr char kQuitLabel[] = "QUIT";
+    for (u32 k = 0; k < sizeof(kQuitLabel); k++) {
+        wr8(kQuitStringAddr + k, u8(kQuitLabel[k]));
+    }
+
+    const double x = s2d(rd32(c.r[2] + 0xFFFFCDF4u));      // 160.0
+    constexpr double startY = 74.0;
+    constexpr double stepY = 29.0;  // matches the vertical spacing of the Options submenu rows
+    constexpr double scale = 0.70;  // matches the font size of the Options submenu items
+
+    for (int i = 0; i < 6; i++) {
+        c.r[3] = kMainStrings[i < 5 ? i : 4];
+        f_7FD58DD8(c);
+        const u32 strPtr = c.r[3];
+        const u8 idx = rd8(menuObj + 0x3BA4u);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(idx) * 108u;
+        c.r[3] = strPtr;
+        c.r[4] = slot;
+        c.r[5] = 0u;
+        c.f[1] = c.ps1[1] = rsingle(x);
+        c.f[2] = c.ps1[2] = rsingle(startY + double(i) * stepY);
+        f_7FD58EF0(c);
+        if (i == 5) {
+            c.r[3] = slot;
+            c.r[4] = kQuitStringAddr;
+            f_7FD3E418(c);
+        }
+        wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, 0xFFFFFFFFu);
+        wr16(rd32(menuObj + 0x6520u) + u32(idx) * 44u + 2u, 0xFFFFu);
+        wr8(menuObj + 0x3BA4u, idx + 1u);
+    }
+
+    const u8 count = rd8(menuObj + 0x3BA4u);
+    for (u8 i = 0; i < count; i++) {
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(i) * 108u;
+        c.r[3] = slot;
+        c.r[4] = 1u;
+        f_7FD3E9B8(c);
+        c.r[3] = slot;
+        c.f[1] = c.ps1[1] = rsingle(scale);
+        f_7FD3EA1C(c);
+    }
+
+    c.r[3] = menuObj;
+    f_7FD6AF54(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 2u;
+    f_7FD76500(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 5u;
+    c.r[5] = 10u;
+    c.r[6] = 18u;
+    c.r[7] = 0u;
+    f_7FD6AD9C(c);
+
+    c.r[3] = 0u;
+    f_7FD30B8C(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 0x15u;
+    f_7FD7695C(c);
+
+    wr8(c.r[13] + 0xFFFFB552u, 0xFFu);
+}
+
+void hle_MainMenuUpdate(Ctx& c) {
+    const u32 menuObj = c.r[3];
+    const u8 btn = rd8(menuObj + 0x6699u);
+    const s8 sel = s8(rd8(menuObj + 0x23u));
+    const bool accept = (btn & 0x10u) != 0 || ((btn & 0x40u) != 0 && sel == 0);
+    if (!accept) {
+        f_7FD6C23C_orig(c);  // handles attract demo idle timer
+        return;
+    }
+    GuestFrame gf(c);
+    wr32(menuObj + 0x2Cu, rd32(c.r[2] + 0xFFFFCE08u));
+    c.r[3] = 0x1E1u;
+    c.r[4] = 0x40u;
+    f_7FD5123C(c);
+
+    c.r[3] = menuObj + 0x6718u;
+    c.r[4] = u32(s32(sel));
+    c.r[5] = 1u;
+    c.r[6] = rd8(menuObj + 0x3Eu);
+    f_7FD77158(c);
+
+    if (sel == 5) {
+        logf("menu", "quit to desktop (main menu)");
+        quitToDesktop();
+    }
+
+    static constexpr u32 kTargets[5] = {0x17u, 0x12u, 0x07u, 0x08u, 0x06u};
+    const u32 target = (sel >= 0 && sel < 5) ? kTargets[sel] : 0x17u;
+    c.r[3] = menuObj;
+    c.r[4] = target;
+    c.r[5] = 0u;
+    f_7FD6BCF0_orig(c);
+}
+
+void hle_OptionsMenuSetup(Ctx& c) {
+    GuestFrame gf(c);
+    const u32 menuObj = c.r[3];
+    c.r[3] = menuObj;
+    c.r[4] = 6u;
+    c.r[5] = 11u;
+    c.r[6] = 24u;
+    c.r[7] = 0u;
+    f_7FD6AD9C(c);
+
+    wr8(menuObj + 0x32u, 1);
+    wr8(menuObj + 0x35u, 0);
+
+    static constexpr u32 kOptStrings[4] = {
+        0x7FDE3480u,  // FrntEnd_opts_main_gameSettings
+        0x7FDE34A0u,  // FrntEnd_opts_main_videoSettings
+        0x7FDE34C0u,  // FrntEnd_opts_main_soundSettings
+        0x7FDE3504u,  // FrntEnd_opts_main_back
+    };
+    static constexpr u32 kOptRows[4] = {6u, 8u, 10u, 12u};
+    const double scale = s2d(rd32(c.r[2] + 0xFFFFCD50u));
+
+    for (int i = 0; i < 4; i++) {
+        c.r[3] = kOptStrings[i];
+        f_7FD58DD8(c);
+        const u32 strPtr = c.r[3];
+        const u8 idx = rd8(menuObj + 0x3BA4u);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(idx) * 108u;
+        c.r[3] = strPtr;
+        c.r[4] = slot;
+        c.r[5] = 1u;
+        c.f[1] = c.ps1[1] = rsingle(scale);
+        c.f[2] = c.ps1[2] = rsingle(scale);
+        f_7FD58EF0(c);
+        wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, kOptRows[i]);
+        c.r[3] = rd32(menuObj + 0x6520u) + u32(idx) * 44u;
+        c.r[4] = kOptRows[i] + 1u;
+        f_7FD77960(c);
+        wr8(menuObj + 0x3BA4u, idx + 1u);
+    }
+
+    // OPTIONS title header (gold)
+    {
+        c.r[3] = 0x7FDE351Cu;  // FrntEnd_opts_main_options
+        f_7FD58DD8(c);
+        const u32 strPtr = c.r[3];
+        const u8 idx = rd8(menuObj + 0x3BA4u);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(idx) * 108u;
+        c.r[3] = strPtr;
+        c.r[4] = slot;
+        c.r[5] = 1u;
+        c.f[1] = c.ps1[1] = rsingle(scale);
+        c.f[2] = c.ps1[2] = rsingle(scale);
+        f_7FD58EF0(c);
+        wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, 3u);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xEBu;
+        c.r[6] = 0xD7u;
+        c.r[7] = 0x7Du;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+        wr8(menuObj + 0x3BA4u, idx + 1u);
+    }
+
+    const u8 count = rd8(menuObj + 0x3BA4u);
+    for (u8 i = 0; i < count; i++) {
+        c.r[3] = rd32(menuObj + 0x3B80u) + u32(i) * 108u;
+        c.r[4] = 1u;
+        f_7FD3E9B8(c);
+    }
+
+    wr8(menuObj + 0x24u, 4);  // 4 selectable items
+    if (rd8(menuObj + 0x23u) >= 4u) wr8(menuObj + 0x23u, 0u);
+    c.r[3] = menuObj;
+    f_7FD6AF54(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 2u;
+    f_7FD76500(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 0x15u;
+    f_7FD7695C(c);
+}
+
+void hle_OptionsMenuUpdate(Ctx& c) {
+    const u32 menuObj = c.r[3];
+    const u8 btn = rd8(menuObj + 0x6699u);
+    const s8 sel = s8(rd8(menuObj + 0x23u));
+    const bool back = (btn & 0x20u) != 0 || ((btn & 0x10u) != 0 && sel == 3);
+    if (back) {
+        GuestFrame gf(c);
+        c.r[3] = menuObj + 0x6718u;
+        c.r[4] = 3u;
+        c.r[5] = 1u;
+        c.r[6] = rd8(menuObj + 0x3Eu);
+        f_7FD77158(c);
+
+        c.r[3] = 0x1E2u;
+        c.r[4] = 0x40u;
+        f_7FD5123C(c);
+
+        if (rd8(0x7FE1C4A0u) != 0 && rd8(c.r[13] + 0xFFFFB550u) != 0) {
+            c.r[3] = 0x7FE1C4A0u;
+            f_7FD57658(c);
+        }
+        c.r[3] = menuObj;
+        c.r[4] = 0x04u;
+        c.r[5] = 4u;  // highlight Options in Main Menu
+        f_7FD6BCF0(c);
+        return;
+    }
+    if ((btn & 0x10u) == 0) return;
+    GuestFrame gf(c);
+    c.r[3] = 0x1E1u;
+    c.r[4] = 0x40u;
+    f_7FD5123C(c);
+
+    c.r[3] = menuObj;
+    c.r[4] = 0x15u;
+    f_7FD7695C(c);
+
+    c.r[3] = menuObj + 0x6718u;
+    c.r[4] = u32(s32(sel));
+    c.r[5] = 1u;
+    c.r[6] = rd8(menuObj + 0x3Eu);
+    f_7FD77158(c);
+
+    static constexpr u32 kOptTargets[3] = {0x09u, 0x0Bu, 0x0Fu};
+    if (sel >= 0 && sel < 3) {
+        c.r[3] = menuObj;
+        c.r[4] = kOptTargets[sel];
+        c.r[5] = 0u;
+        f_7FD6BCF0(c);
+    }
+}
+
 // The player's craft (0x7FDEFE14 in missions), or 0 when that pointer holds something else:
 // a craft's vtable (+0x80) has CraftDestroy (0x7FC3E528).
 static u32 s_craftLast = 0;  // playerCraft's cache (a state load clears it)
@@ -373,21 +699,73 @@ static void gyroProbe(u32 craft, bool flying) {
 // frames for a moment. Outside missions, after 3 s of full frames.
 constexpr double kSkipStep = 8.0 / 60.0;
 constexpr int kSkipHz = 600;
+constexpr double kSkipHoldSecs = 2.0;
 static bool s_skip = false;
-bool cinematicSkip() { return s_skip; }
+static bool s_bootSkipping = false;
+static bool s_nativeSceneSkip = false;
+static double s_nativeSkipFallbackSecs = 0.0;
+bool cinematicSkip() { return s_skip || s_bootSkipping; }
+
+namespace {
+struct CutsceneSkipState {
+    std::mutex mu;
+    bool active = false;
+    bool holding = false;
+    float progress = 0.f;
+    u64 lastHintTb = 0;
+} s_skipUi;
+}  // namespace
+
+CutsceneSkipOverlay cutsceneSkipOverlay() {
+    std::lock_guard lk(s_skipUi.mu);
+    CutsceneSkipOverlay out;
+    if (!s_skipUi.active) return out;
+    if (s_skipUi.holding) {
+        out.visible = true;
+        out.holding = true;
+        out.progress = s_skipUi.progress;
+        out.alpha = 1.f;
+        return out;
+    }
+    if (s_skipUi.lastHintTb) {
+        const double age = double(tbNow() - s_skipUi.lastHintTb) / double(kTbClock);
+        if (age < 2.2) {
+            out.visible = true;
+            out.holding = false;
+            out.progress = 0.f;
+            out.alpha = age < 1.7 ? 1.f : float((2.2 - age) / 0.5);
+        }
+    }
+    return out;
+}
 
 // The game has a skip of its own for scenes seen before (this session): SceneSkipAllowed
 // (0x7FD56FD8; scene id r3) returns A pressed if SceneSeen (0x7FD56E5C) says so, scenes 13 and 23
-// always, and in game mode 5 (the attract demo) as its exit. The scene player (0x7FD544B8,
-// 0x7FD5540C, 0x7FD554DC) then goes on to the next scene, not to play: on a mission's second crawl
-// the next cutscene's music started about 2 s after the press while the crawl still scrolled,
-// the crawl faded a second later, and the cutscene opened on several seconds of stars before its
-// voices - it looked like the crawl went on under the next scene's sound. With skippable cutscenes
-// on, a skip the game allows starts ours too (as B does), straight to play.
-static bool s_gameSkipped = false;
+// always, and in game mode 5 (the attract demo) as its exit. With skippable cutscenes on, we
+// suppress that instant tap-skip outside the attract demo so cutscenes only skip via hold-B.
+// For Credits (13), Ending Credits (14) and Audio Test (23), holding B triggers the game's
+// native scene exit instead of fast-forwarding so it returns straight to the menu with no
+// multi-second "SKIPPING" screen.
+static bool standaloneScene() {
+    const u32 scene = rd32(0x7FDE822C);
+    const u8 screen = rd8(0x800962EF);
+    return scene == 13 || scene == 14 || scene == 23 || screen == 0x23 || screen == 0x24;
+}
+
 void hle_SceneSkipAllowed(Ctx& c) {
+    if (s_nativeSceneSkip) {
+        s_nativeSceneSkip = false;
+        s_nativeSkipFallbackSecs = 0.0;
+        c.r[3] = 1;
+        return;
+    }
     f_7FD56FD8_orig(c);
-    if ((c.r[3] & 0xFF) && rd8(0x800962EF) != 5) s_gameSkipped = true;  // r13-19121: game mode
+    if (standaloneScene()) return;
+    if (settings::get().skipCutscenes && (c.r[3] & 0xFF) && rd8(0x800962EF) != 5) {
+        c.r[3] = 0;
+        std::lock_guard lk(s_skipUi.mu);
+        s_skipUi.lastHintTb = tbNow();
+    }
 }
 
 // Skip intro logos (settings): the boot screen (mode 5, screen 22 at 0x7FDE8254/0x7FDE822C, see
@@ -401,6 +779,8 @@ static void keepAmmo();
 static void craftDiffProbe();
 static void resultsTest(Ctx& c);
 static void unlocksFrame();
+static void commentaryUpdate(Ctx& c);
+static void artGalleryUpdate(Ctx& c);
 
 void hle_GameFrameDelta(Ctx& c) {
     frameDelta(c);
@@ -411,35 +791,88 @@ void hle_GameFrameDelta(Ctx& c) {
     lastTb = tb;
 
     const bool cinematic = viXfbLines() < 400;
-    const bool b = (padState(0).buttons & 0x0200) != 0;  // PAD_BUTTON_B
-    static bool bWas = false;
-    const bool bPressed = b && !bWas;
-    bWas = b;
-    const bool gameSkipped = s_gameSkipped;
-    s_gameSkipped = false;
-    if (!s_skip && s.skipCutscenes && cinematic && (bPressed || gameSkipped)) {
-        s_skip = true;
-        logf("skip", "skipping to the next gameplay%s", bPressed ? "" : " (the game's own skip of a scene seen before)");
-        viSetRate(kSkipHz);
-        setDvdBoost(50.0);
+    const PadState pad = padState(0);
+    const bool b = !gfx::menuOpen() && (pad.buttons & 0x0200) != 0;  // PAD_BUTTON_B
+    const bool anyBtn = !gfx::menuOpen() && (pad.buttons & 0x1F00) != 0;  // A/B/X/Y/Start
+    static bool anyWas = false;
+    const bool anyPressed = anyBtn && !anyWas;
+    anyWas = anyBtn;
+
+    static double skipHold = 0.0;
+    static bool s_skipBootOnce = false;
+    const bool inBoot = bootScreen();
+    const bool inFrontEndMenu = rd32(0x7FDE8254) == 6;  // front-end menus (incl. letterboxed Sound Settings Audio Test)
+    const bool inStandaloneScene = standaloneScene();
+    if (!inBoot) s_skipBootOnce = false;
+    if (!cinematic) {
+        s_nativeSceneSkip = false;
+        s_nativeSkipFallbackSecs = 0.0;
+    }
+    const bool canSkipBoot = inBoot && !s.skipLogos && !s_skipBootOnce;
+    const bool canSkip = !s_skip && !s_nativeSceneSkip && !inStandaloneScene && s.skipCutscenes &&
+                         ((!inFrontEndMenu && cinematic) || canSkipBoot);
+    if (canSkip && b) {
+        skipHold += real;
+    } else {
+        skipHold = 0.0;
+    }
+    {
+        std::lock_guard lk(s_skipUi.mu);
+        s_skipUi.active = canSkip;
+        s_skipUi.holding = canSkip && b;
+        s_skipUi.progress = canSkip ? float(std::clamp(skipHold / kSkipHoldSecs, 0.0, 1.0)) : 0.f;
+        if (canSkip && anyPressed) s_skipUi.lastHintTb = tb;
+        if (!canSkip) s_skipUi.lastHintTb = 0;
+    }
+    if (canSkip && skipHold >= kSkipHoldSecs) {
+        skipHold = 0.0;
+        if (canSkipBoot) {
+            s_skipBootOnce = true;
+            logf("skip", "skipping intro logos (held B)");
+        } else {
+            s_nativeSceneSkip = true;
+            s_nativeSkipFallbackSecs = inStandaloneScene ? 0.0 : 0.25;
+            logf("skip", "triggering native scene skip (held B)");
+        }
+    }
+    if (s_nativeSceneSkip && s_nativeSkipFallbackSecs > 0.0) {
+        s_nativeSkipFallbackSecs -= real;
+        if (s_nativeSkipFallbackSecs <= 0.0) {
+            s_nativeSceneSkip = false;
+            s_nativeSkipFallbackSecs = 0.0;
+            if (!inFrontEndMenu && cinematic) {
+                s_skip = true;
+                logf("skip", "native skip unused by scene; falling back to fast-forward");
+                viSetRate(kSkipHz);
+                setDvdBoost(50.0);
+            }
+        }
+    }
+    const bool wantBootSkip = (s.skipLogos || s_skipBootOnce) && inBoot;
+    if (wantBootSkip != s_bootSkipping) {
+        s_bootSkipping = wantBootSkip;
+        if (s_bootSkipping) {
+            viSetRate(kSkipHz);
+            setDvdBoost(50.0);
+        } else if (!s_skip) {
+            viSetRate(s.fps);
+            setDvdBoost(1.0);
+        }
     }
     static double fullFor = 0;  // real seconds of frames that are not letterboxed while skipping
     fullFor = s_skip && !cinematic ? fullFor + real : 0;
     const u32 craft = playerCraft();
     static int flyingFrames = 0;  // (the craft passes through state 0 while it is set up)
     flyingFrames = !cinematic && craft && rd32(craft + 0x370) == 0 ? flyingFrames + 1 : 0;
-    if (s_skip && (!s.skipCutscenes || flyingFrames >= 10 || fullFor > 3.0)) {
+    if (s_skip && (!s.skipCutscenes || inFrontEndMenu || flyingFrames >= 10 || fullFor > 3.0)) {
         s_skip = false;
         logf("skip", "back to play");
         viSetRate(s.fps);
         setDvdBoost(1.0);
     }
-    if (s_skip) {
+    if (s_skip || s_bootSkipping) {
         c.f[1] = c.ps1[1] = rsingle(kSkipStep);
         setAudioSpeed(std::min(kSkipStep / real, 64.0), true);
-    } else if (s.skipLogos && bootScreen()) {
-        c.f[1] = c.ps1[1] = rsingle(c.f[1] * 16.0);
-        setAudioSpeed(16.0, true);
     } else if (s_moviePaused) {
         setAudioSpeed(1.0, true);
     } else {
@@ -450,6 +883,8 @@ void hle_GameFrameDelta(Ctx& c) {
     craftDiffProbe();
     resultsTest(c);
     unlocksFrame();
+    commentaryUpdate(c);
+    artGalleryUpdate(c);
     // widescreen: the flight HUD goes to the screen edges (not the menus: their layout is 4:3).
     // Nor the pause screen, drawn while the craft exists: its objectives' check marks and dots
     // sit left of the centered text and were moved out to the left (by the 4:3 margin, 240 px
@@ -1179,6 +1614,193 @@ void hle_CutsceneVideoDraw(Ctx& c) {
 // Infinite lives (settings): LoseLife (0x7FD7648C) decrements the lives byte at 0x800962EE
 // (3 ships at a mission start; at 1 it ends the game instead: 0x800962EF = 0x21, mode 6) and
 // returns 1. With the cheat it reports the life lost without taking it.
+// Audio commentary pause / resume (L3 / left stick click, or C on keyboard).
+// Freezes the active MusyX commentary voice stream at its exact sample via sndStreamFrq(stid, 0),
+// restores normal BGM/SFX volume while paused via f_7FD4B524, and re-ducks on resume.
+static std::atomic<u8> s_commentaryUi{0};  // 0 = hidden, 1 = playing, 2 = paused
+
+CommentaryOverlay commentaryOverlay() {
+    const u8 st = s_commentaryUi.load(std::memory_order_relaxed);
+    return {st != 0, st == 2};
+}
+
+static void commentaryUpdate(Ctx& c) {
+    struct PausedVoice {
+        u32 stid = 0;
+        u32 frq = 0;
+        u8 pan = 64;
+        bool active = false;
+    };
+    static PausedVoice s_paused[2];
+    static bool s_isPaused = false;
+    static double s_duckVol1 = 0.35;
+    static double s_duckVol2 = 0.35;
+
+    constexpr u32 kVoiceMgr = 0x7FE1C1D8u;
+    constexpr u32 kUnlockWord = 0x7FE1C4A0u + 0x658u;
+    constexpr u32 kAudioMixer = 0x7FE19510u;
+
+    auto callStreamFrq = [&](u32 stid, u32 frq) {
+        const double f1 = c.f[1], ps1 = c.ps1[1];
+        GuestFrame gf(c);
+        c.r[3] = stid;
+        c.r[4] = frq;
+        f_80013AC0(c);
+        c.f[1] = f1;
+        c.ps1[1] = ps1;
+    };
+    auto callStreamMix = [&](u32 stid, u32 vol, u8 pan) {
+        const double f1 = c.f[1], ps1 = c.ps1[1];
+        GuestFrame gf(c);
+        c.r[3] = stid;
+        c.r[4] = vol;
+        c.r[5] = pan;
+        c.r[6] = 0;
+        c.r[7] = 0;
+        c.r[8] = 0;
+        f_8001386C(c);
+        c.f[1] = f1;
+        c.ps1[1] = ps1;
+    };
+    auto callAudioDuck = [&](double v1, double v2, double fadeSec) {
+        const double f1 = c.f[1], ps1 = c.ps1[1];
+        GuestFrame gf(c);
+        c.f[1] = c.ps1[1] = rsingle(v1);
+        c.f[2] = c.ps1[2] = rsingle(v2);
+        c.f[3] = c.ps1[3] = rsingle(fadeSec);
+        f_7FD4B524(c);
+        c.f[1] = f1;
+        c.ps1[1] = ps1;
+    };
+
+    if (s_isPaused) {
+        bool anyStillValid = false;
+        for (int i = 0; i < 2; i++) {
+            if (!s_paused[i].active) continue;
+            const u32 slot = kVoiceMgr + u32(i) * 0x70u;
+            if (rd8(slot) == 3 && rd32(slot + 0x50u) == s_paused[i].stid) anyStillValid = true;
+            else s_paused[i].active = false;
+        }
+        if (!anyStillValid) {
+            s_isPaused = false;
+        } else {
+            // Keep BGM/SFX at normal volume if the game re-ducks (e.g. after unpausing the Start menu)
+            const double cur1 = s2d(rd32(kAudioMixer + 0xD58u));
+            const double cur2 = s2d(rd32(kAudioMixer + 0xD7Cu));
+            if (cur1 < 0.99 || cur2 < 0.99) callAudioDuck(1.0, 1.0, 0.2);
+        }
+    }
+
+    const bool commentaryEnabled = (rd32(kUnlockWord) & 0x100u) != 0;
+    const bool commentaryFlag = rd8(c.r[13] + 0xFFFFB4E2u) != 0;
+    bool streamPlaying = false;
+    for (int i = 0; i < 2; i++) {
+        if (rd8(kVoiceMgr + u32(i) * 0x70u) == 3) streamPlaying = true;
+    }
+
+    if (input::commentaryTogglePressed()) {
+        if (s_isPaused) {
+            for (int i = 0; i < 2; i++) {
+                if (!s_paused[i].active) continue;
+                callStreamFrq(s_paused[i].stid, s_paused[i].frq);
+                callStreamMix(s_paused[i].stid, 127, s_paused[i].pan);
+                s_paused[i].active = false;
+            }
+            s_isPaused = false;
+            callAudioDuck(s_duckVol1, s_duckVol2, 0.25);
+        } else if (commentaryEnabled && streamPlaying) {
+            const u32 vdyMgr = rd32(c.r[13] + 0xFFFFB4F0u);
+            const u32 vdyTbl = vdyMgr ? rd32(vdyMgr + 4u) : 0;
+            int count = 0;
+            for (int i = 0; i < 2; i++) {
+                const u32 slot = kVoiceMgr + u32(i) * 0x70u;
+                if (rd8(slot) != 3) continue;
+                const u32 stid = rd32(slot + 0x50u);
+                const u8 pan = rd8(slot + 0x0Bu);
+                const u32 entry = rd16(slot + 0x08u);
+                const u32 frq = vdyTbl ? rd16(vdyTbl + entry * 56u + 2u) : 22050u;
+                s_paused[i] = {stid, frq ? frq : 22050u, pan, true};
+                callStreamFrq(stid, 0);
+                callStreamMix(stid, 0, pan);
+                count++;
+            }
+            if (count > 0) {
+                const double cur1 = s2d(rd32(kAudioMixer + 0xD58u));
+                const double cur2 = s2d(rd32(kAudioMixer + 0xD7Cu));
+                s_duckVol1 = (cur1 > 0.01 && cur1 < 0.99) ? cur1 : 0.35;
+                s_duckVol2 = (cur2 > 0.01 && cur2 < 0.99) ? cur2 : 0.35;
+                callAudioDuck(1.0, 1.0, 0.25);
+                s_isPaused = true;
+            }
+        }
+    }
+
+    if (s_isPaused) s_commentaryUi.store(2, std::memory_order_relaxed);
+    else if (commentaryEnabled && commentaryFlag && streamPlaying) s_commentaryUi.store(1, std::memory_order_relaxed);
+    else s_commentaryUi.store(0, std::memory_order_relaxed);
+}
+
+// --- Art Gallery caption overlay --------------------------------------------------------------
+namespace {
+constexpr int kArtGalleryCount = 27;
+const char* const kArtGalleryTitles[kArtGalleryCount] = {
+    "Massassi Temple Steps",            // 00: frontendGal/01
+    "Bespin Tibanna Gas Refineries",    // 01: frontendGal/02
+    "Hoth DF.9 Laser Turret",           // 02: frontendGal/03
+    "Hoth Rebel Turret",                // 03: frontendGal/04
+    "Bespin Tibanna Gas Platforms",     // 04: frontendGal/05
+    "Bespin Gas Balloons & Cloud Car",  // 05: frontendGal/06
+    "Hoth Planetary Ion Cannon",        // 06: frontendGal/07
+    "Hoth Ion Cannon",                  // 07: frontendGal/08
+    "Hoth Main Power Generators",       // 08: frontendGal/09
+    "AT-AT Walker",                     // 09: frontendGal/ATAT
+    "AT-ST Walker",                     // 10: frontendGal/AtSt
+    "A-Wing Starfighter",               // 11: frontendGal/AWing
+    "B-Wing Starfighter",               // 12: frontendGal/BWing
+    "Millennium Falcon",                // 13: frontendGal/Falcon
+    "Lambda-Class Imperial Shuttle",    // 14: frontendGal/ImpShuttle
+    "Maw Installation Fuel Tanks",      // 15: frontendGal/mawFuelTanks
+    "Maw Installation Landing Platform",// 16: frontendGal/mawPlatform
+    "Proximity Space Mine",             // 17: frontendGal/mine
+    "Orbital Shield Generator",         // 18: frontendGal/shieldGenerator
+    "Space Defense Gun Turret",         // 19: frontendGal/spaceGunTurret
+    "Rebel Snowspeeder",                // 20: frontendGal/Speeder
+    "TIE Fighter",                      // 21: frontendGal/TieFighter
+    "TIE Interceptor",                  // 22: frontendGal/TieInterceptor
+    "Bespin Twin-Pod Cloud Car",        // 23: frontendGal/CloudCar
+    "X-Wing Starfighter",               // 24: frontendGal/XWing
+    "X-Wing Cockpit",                   // 25: frontendGal/XWingCockpit
+    "Y-Wing Starfighter",               // 26: frontendGal/YWing
+};
+std::atomic<int> s_artGalleryIdx{-1};  // -1 = inactive, 0..26 = active image index
+}  // namespace
+
+ArtGalleryOverlay artGalleryOverlay() {
+    const int idx = s_artGalleryIdx.load(std::memory_order_relaxed);
+    if (idx < 0 || idx >= kArtGalleryCount) return {};
+    return {true, idx, kArtGalleryCount, kArtGalleryTitles[idx]};
+}
+
+static void artGalleryUpdate(Ctx& c) {
+    int idx = -1;
+    if (rd32(0x7FDE8254) == 6) {
+        const u32 menuObj = rd32(c.r[13] + 0xFFFFB548u);
+        if (menuObj >= 0x7F000000u && menuObj < 0x81800000u) {
+            // Art Gallery is screen 0x14 (stored at r13 + 0xFFFFB54F) with mode 1 at menuObj + 0x04;
+            // gallery struct sits at menuObj + 0x6794
+            const u8 curScreen = rd8(c.r[13] + 0xFFFFB54Fu);
+            const u8 galState = rd8(menuObj + 0x6794u + 0x3E7u);
+            if ((curScreen == 0x14u || rd32(menuObj + 0x04u) == 1u) && galState == 1u) {
+                const u8 pic = rd8(menuObj + 0x6794u + 0x3E8u);
+                if (pic < u8(kArtGalleryCount)) {
+                    idx = int(pic);
+                }
+            }
+        }
+    }
+    s_artGalleryIdx.store(idx, std::memory_order_relaxed);
+}
+
 void hle_LoseLife(Ctx& c) {
     if (settings::get().infiniteLives && rd8(0x800962EF) != 0x21) {
         c.r[3] = 1;

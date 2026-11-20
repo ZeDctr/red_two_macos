@@ -21,10 +21,10 @@ enum class GyroMode : int { Off = 0, Always, Held, Toggle, Paused, Count };
 inline constexpr float kMaxAspect = 64.f / 27.f;
 
 // The game's button prompts (gfx/button_icons.cpp): Auto shows PlayStation symbols while port 1's
-// controller is a PlayStation one and Xbox buttons otherwise; Xbox / PlayStation always those;
-// GameCube the game's own. settings.ini: button_prompts=auto|xbox|playstation|gamecube (the
-// older xbox_buttons=1/0 reads as auto / gamecube).
-enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, GameCube, Count };
+// controller is a PlayStation one, Switch buttons for Nintendo Switch controllers, and Xbox buttons
+// otherwise; Xbox / PlayStation / Switch always those; GameCube the game's own. settings.ini:
+// button_prompts=auto|xbox|playstation|switch|gamecube (the older xbox_buttons=1/0 reads as auto / gamecube).
+enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, Switch, GameCube, Count };
 
 // How the craft's turn and pitch rate follow the control stick (input.cpp mainStickToGame):
 // Smooth grows with the deflection to the power 1.5, Linear in proportion, GameCube is the game's
@@ -75,6 +75,7 @@ struct Settings {
     // gx_bridge.cpp precompileShaders). Off: the game starts at once and they compile while it
     // runs (objects whose shader is not ready yet are skipped for a few frames: pop-in).
     bool precompileShaders = true;
+    bool vsync = true;           // synchronize presentation with display refresh (prevents screen tearing)
     // audio
     int volume = 100;            // master volume, 0..100 (output gain (volume/100)^2)
     bool backgroundAudio = true;  // keep playing while the window is in the background

@@ -163,6 +163,32 @@ struct MovieOverlay {
     u64 lastActionTb = 0;   // last seek or pause/resume: bar hides 2 s after
 };
 MovieOverlay movieOverlay();
+bool movieFullscreenActive();  // hle_game.cpp: true while a fullscreen .movie plays (keeps 4:3)
+
+// hle_game.cpp: hold-to-skip cutscene indicator (bottom-right corner)
+struct CutsceneSkipOverlay {
+    bool visible = false;
+    bool holding = false;
+    float progress = 0.f;  // 0..1 while holding B
+    float alpha = 1.f;
+};
+CutsceneSkipOverlay cutsceneSkipOverlay();
+
+// hle_game.cpp: audio commentary playback / pause indicator (bottom-center)
+struct CommentaryOverlay {
+    bool active = false;
+    bool paused = false;
+};
+CommentaryOverlay commentaryOverlay();
+
+// hle_game.cpp: Art Gallery caption & index overlay (bottom-center)
+struct ArtGalleryOverlay {
+    bool active = false;
+    int index = 0;         // 0..26
+    int total = 27;
+    const char* title = "";
+};
+ArtGalleryOverlay artGalleryOverlay();
 
 // hle_game.cpp: the game's own passcode unlocks (two flag words of its progress block, kept in
 // its save), for the menu's cheats page
@@ -184,8 +210,9 @@ void touchDraw();
 bool touchApply(void* padStatus);
 void setHudAnchoring(bool on);  // gfx/menu.cpp: widescreen HUD pieces at the screen edges (in flight)
 void noteWidenedAspect(float aspect);  // gfx/menu.cpp: a projection aspect a camera was widened to
-void buttonIconsUpdate();  // gfx/button_icons.cpp: Xbox / PlayStation button prompts per the setting, controller and bindings
+void buttonIconsUpdate();  // gfx/button_icons.cpp: Xbox / PlayStation / Switch button prompts per the setting, controller and bindings
 void buttonIconsNoteTexture(u32 fmt, u32 w, u32 h, const u8* data, u32 bytes);  // a bound texture (baked prompts)
+char buttonGlyphForGcB();  // gfx/button_icons.cpp: glyph for the button bound to GameCube B ('A'/'B'/'X'/'Y' or PS 'x'/'o'/'s'/'t')
 void setMenuTiling(bool on);    // gfx/gx_bridge.cpp: widescreen menu backgrounds tiled into the sides
 }
 
@@ -195,6 +222,9 @@ void poll();  // once per frame: Aurora pads/keyboard -> SI controller state
 void rumble(int chan, u32 cmd);  // SI motor bits: 0 stop, 1 rumble, 2 hard stop
 bool isPlayStation(int sdlGamepadType);  // an SDL_GamepadType of a PS3 / PS4 / PS5 controller
 bool port1PlayStation();  // port 1's controller is a PlayStation one (as of the last poll; button prompts)
+bool isNintendoSwitch(int sdlGamepadType);  // an SDL_GamepadType of a Nintendo Switch Pro / Joy-Con controller
+bool port1NintendoSwitch();  // port 1's controller is a Nintendo Switch one (as of the last poll; button prompts)
+bool commentaryTogglePressed();  // L3 (left stick click) or C key: pause/resume audio commentary
 // the settings' deadzone (round, rescaled) and sensitivity of the control stick or the C-stick; -1..1
 void shapeStick(float& x, float& y, bool mainStick);
 // The control stick (-1..1, as the controller reports it) as the game gets it: raw PADStatus

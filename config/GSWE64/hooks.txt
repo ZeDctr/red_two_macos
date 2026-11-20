@@ -72,3 +72,9 @@ hle     MawShieldPanelHit
 hle     CraftMask
 hle     AllMissionsMedal
 hle     MissionMedal
+# Front-end menu customization: promote Special Features, Rogue Leaders, and Passcodes to the Main Menu
+hle     MenuSetScreen
+hle     MainMenuSetup
+hle     MainMenuUpdate
+hle     OptionsMenuSetup
+hle     OptionsMenuUpdate

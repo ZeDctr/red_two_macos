@@ -232,6 +232,7 @@ void followActiveController() {  // JoystickAccess held
 }
 
 bool s_port1PlayStation = false;  // port 1's controller is a PlayStation one (button prompts)
+bool s_port1NintendoSwitch = false;  // port 1's controller is a Nintendo Switch one (button prompts)
 
 // the session log says which controller port 1 has whenever that changes (automatic or taken over)
 void logPort1() {  // JoystickAccess held
@@ -242,6 +243,7 @@ void logPort1() {  // JoystickAccess held
     SDL_Gamepad* g = src ? SDL_GetGamepadFromID(aurora::input::gamepad_for_source(src)) : nullptr;
     const SDL_GamepadType type = g ? SDL_GetGamepadType(g) : SDL_GAMEPAD_TYPE_UNKNOWN;
     s_port1PlayStation = isPlayStation(type);
+    s_port1NintendoSwitch = isNintendoSwitch(type);
     const char* typeName = SDL_GetGamepadStringForType(type);
     if (g)
         logf("input", "port 1 controller: '%s' (vid %04x, pid %04x, type %s)", SDL_GetGamepadName(g), SDL_GetGamepadVendor(g),
@@ -617,6 +619,17 @@ bool isPlayStation(int sdlGamepadType) {
 }
 bool port1PlayStation() { return s_port1PlayStation; }
 
+bool isNintendoSwitch(int sdlGamepadType) {
+    return sdlGamepadType == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
+           sdlGamepadType == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+           sdlGamepadType == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
+           sdlGamepadType == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR;
+}
+bool port1NintendoSwitch() { return s_port1NintendoSwitch; }
+
+static std::atomic<bool> s_commentaryToggle{false};
+bool commentaryTogglePressed() { return s_commentaryToggle.exchange(false); }
+
 JoystickAccess::JoystickAccess() : m_held(s_joyMutex.try_lock()) {}
 JoystickAccess::~JoystickAccess() {
     if (m_held) s_joyMutex.unlock();
@@ -775,6 +788,32 @@ void poll() {
         }
     }
     const bool menu = gfx::menuOpen();
+    // Unused button for pausing/resuming Audio Commentary: L3 (left stick click) or keyboard C
+    {
+        bool pressed = false;
+        if (!menu) {
+            int nKeys = 0;
+            if (const bool* ks = SDL_GetKeyboardState(&nKeys); ks && SDL_SCANCODE_C < nKeys && ks[SDL_SCANCODE_C])
+                pressed = true;
+            if (!pressed && s_pads) {
+                JoystickAccess joy;
+                if (joy) {
+                    int n = 0;
+                    if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
+                        for (int i = 0; i < n && !pressed; i++) {
+                            if (SDL_Gamepad* g = SDL_GetGamepadFromID(ids[i])) {
+                                if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_LEFT_STICK)) pressed = true;
+                            }
+                        }
+                        SDL_free(ids);
+                    }
+                }
+            }
+        }
+        static bool was = false;
+        if (pressed && !was) s_commentaryToggle.store(true);
+        was = pressed;
+    }
     // After the menu closes, a controller stays idle until its buttons are let go: B (which
     // closes the menu) or A must not reach the game as a press.
     static bool heldFromMenu[PAD_CHANMAX] = {};

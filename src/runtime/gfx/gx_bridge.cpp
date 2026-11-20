@@ -1790,7 +1790,7 @@ bool init(int argc, char** argv, std::string& disc, const std::string& discNote)
     }
     cfg.desiredBackend = BACKEND_AUTO;
     cfg.msaa = settings::get().msaa >= 4 ? 4 : 1;  // (WebGPU: 1 or 4 samples)
-    cfg.vsync = false;  // the game paces itself on the emulated retrace
+    cfg.vsync = settings::get().vsync;
     s_testClear = envFlag("R2_GFX_TEST");
     if (const char* d = getenv("R2_GX_DUMP")) {
         char* end = nullptr;
@@ -1867,6 +1867,9 @@ bool init(int argc, char** argv, std::string& disc, const std::string& discNote)
     // the icon built into the exe (res/red_two.rc) for the window and taskbar too
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
+#ifdef __APPLE__
+    SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "1");
+#endif
 #endif
     // The ubershader mode before Aurora loads the pipeline cache: with them off, the uber
     // pipelines are neither derived from the cached shaders nor built from their stored rows
