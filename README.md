@@ -34,8 +34,8 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 ## Controls & Files
 
-- **In-game menu**: press **F1** or **Back / Select / Minus** on your controller.
-- **Fullscreen**: toggle with **F11** or **Alt+Enter** (or in the Display menu).
+- **In-game menu**: press **F1** *(or **Fn + F1** on Mac keyboards)* or **Back / Select / Minus** on your controller.
+- **Fullscreen**: toggle with **Option + Return** or **F11** *(or in the Display menu)*.
 - **Save states**: **Back + RB** saves, **Back + LB** loads, **Back + D-pad Left/Right** switches slots (keyboard: **F5 / F8 / F6 / F7**).
 - **User files**: settings, memory card (`saves/GSWE64_A.raw`), save states, logs, shader cache, and texture packs live in `~/Library/Application Support/Red Two/`.
 
