@@ -18,7 +18,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 ## Features & macOS Enhancements
 
 - **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, including Aurora shader logic-op fallback (`patches/aurora/0034-logic-op-fallback.patch`).
-- **Standalone macOS `.app` bundle** with bundled dylibs, custom weathered Rogue Squadron icon, and macOS Fullscreen Spaces support.
+- **Standalone macOS `.app` bundle** with bundled dylibs, custom icon, and macOS Fullscreen Spaces support.
 - **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and pause function.
 - **Audio Commentary Controls**: press **L3** or **C** to pause/resume active commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
 - **Art Gallery Captions**: bottom-center title and slide counter overlay for all 27 concept art pieces and renders.
