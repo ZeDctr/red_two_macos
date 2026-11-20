@@ -14,6 +14,7 @@
 #include <vector>
 #include <unordered_map>
 
+#include "../card_image.h"
 #include "../mods.h"
 #include "../achievements.h"
 #include "../runtime.h"
@@ -604,14 +605,29 @@ void cardInit(int slot, const std::string& path) {
     }
     const u32 size = (m.id & 0xFC) * 1024 * 1024 / 8;
     m.data.assign(size, 0xFF);  // erased flash
+    auto autoFormat = [&] {
+        const u64 nowTicks = u64(std::max<time_t>(0, time(nullptr) - 946684800)) * kTbClock;
+        card::format(m.data, nowTicks);
+    };
     if (f) {
         fread(m.data.data(), 1, size, f);
         fclose(f);
-        logf("card", "slot %c: %s (%u Mbit, %u blocks)", 'A' + slot, path.c_str(), m.id & 0xFC, size / 0x2000 - 5);
+        const bool allErased = std::all_of(m.data.begin(), m.data.end(), [](u8 b) { return b == 0xFF; });
+        if (!card::isFormatted(m.data) && allErased) {
+            autoFormat();
+            if (FILE* f2 = fopen(path.c_str(), "wb")) {
+                fwrite(m.data.data(), 1, size, f2);
+                fclose(f2);
+            }
+            logf("card", "slot %c: %s was blank, formatted automatically", 'A' + slot, path.c_str());
+        } else {
+            logf("card", "slot %c: %s (%u Mbit, %u blocks)", 'A' + slot, path.c_str(), m.id & 0xFC, size / 0x2000 - 5);
+        }
     } else if (FILE* f2 = fopen(path.c_str(), "wb")) {
-        fwrite(m.data.data(), 1, size, f2);  // a new, unformatted card
+        autoFormat();
+        fwrite(m.data.data(), 1, size, f2);  // a new, pre-formatted card
         fclose(f2);
-        logf("card", "slot %c: new card %s (unformatted)", 'A' + slot, path.c_str());
+        logf("card", "slot %c: new card %s (formatted automatically)", 'A' + slot, path.c_str());
     } else {
         logf("card", "slot %c: cannot create %s; no card", 'A' + slot, path.c_str());
         return;

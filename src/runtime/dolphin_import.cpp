@@ -98,9 +98,14 @@ constexpr const char* kFlatpak = ".var/app/org.DolphinEmu.dolphin-emu";
 std::vector<fs::path> dolphinExeDirs() { return {}; }
 std::vector<fs::path> dolphinSysDirs() {
     std::vector<fs::path> v;
+#ifdef __APPLE__
+    for (const fs::path& p : {fs::path("/Applications/Dolphin.app/Contents/Resources/Sys"),
+                              homeDir() / "Applications/Dolphin.app/Contents/Resources/Sys"}) {
+#else
     for (const fs::path& p : {fs::path("/usr/share/dolphin-emu/sys"), fs::path("/usr/local/share/dolphin-emu/sys"),
                               fs::path("/var/lib/flatpak/app/org.DolphinEmu.dolphin-emu/current/active/files/share/dolphin-emu/sys"),
                               homeDir() / ".local/share/flatpak/app/org.DolphinEmu.dolphin-emu/current/active/files/share/dolphin-emu/sys"}) {
+#endif
         std::error_code ec;
         if (fs::is_directory(p / "GameSettings", ec)) v.push_back(p);
     }
@@ -121,9 +126,13 @@ std::vector<fs::path> dolphinUserDirs(const std::vector<fs::path>&) {
         add(fs::path(d));
         return out;
     }
+#ifdef __APPLE__
+    add(homeDir() / "Library/Application Support/Dolphin");
+#else
     add(xdg("XDG_DATA_HOME", ".local/share") / "dolphin-emu");
     add(homeDir() / kFlatpak / "data/dolphin-emu");
     add(homeDir() / ".dolphin-emu");
+#endif
     return out;
 }
 

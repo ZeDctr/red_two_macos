@@ -101,10 +101,20 @@ void unload() {
 
 void load() {
     unload();
-    // Red Two's own textures folder (Dolphin's rules), then the folder chosen in the menu
+    // Red Two's own textures folder (Dolphin's rules), bundled app textures, then the folder chosen in the menu
     std::vector<std::pair<std::string, bool>> dirs;  // pack folder, chosen
     if (const std::string root = texturesRoot(); !root.empty())
         for (const std::string& dir : packFolders(root)) dirs.emplace_back(dir, false);
+    if (!automated() || envFlag("R2_TEXTURES")) {
+        if (const char* base = SDL_GetBasePath()) {
+            for (const std::string& dir : packFolders(std::string(base) + "textures")) {
+                bool dup = false;
+                for (const auto& [d, _] : dirs)
+                    if (ieq(d, dir.c_str())) dup = true;
+                if (!dup) dirs.emplace_back(dir, false);
+            }
+        }
+    }
     if (const std::string& chosen = settings::get().texturesFolder; !chosen.empty()) {
         std::string pack;
         if (textureFolderKind(chosen, &pack) == FolderKind::Missing) logf("mods", "texture folder %s: not found", chosen.c_str());

@@ -21,6 +21,12 @@
 #include <SDL3/SDL_system.h>
 #else
 #include <execinfo.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <pthread.h>
+#include <spawn.h>
+extern char** environ;
+#endif
 #endif
 #include <signal.h>
 #include <sys/stat.h>
@@ -204,6 +210,17 @@ void restartGame(bool toLauncher) {
     }
     std::this_thread::sleep_for(std::chrono::seconds(10));
     quit(0);
+#elif defined(__APPLE__)
+    logf("main", "restarting");
+    fflush(stderr);
+    char exe[PATH_MAX] = "";
+    uint32_t sz = sizeof exe;
+    if (_NSGetExecutablePath(exe, &sz) == 0 && s_argv) {
+        pid_t pid = 0;
+        if (posix_spawn(&pid, exe, nullptr, nullptr, s_argv, environ) == 0) quit(0);
+    }
+    logf("main", "restart failed (errno %d)", errno);
+    return;
 #elif !defined(_WIN32)
     // Linux: the process replaces itself (same PID: Steam, gamescope and an AppImage's mount
     // stay with it). Its other threads and windows go with the old image.
@@ -309,7 +326,13 @@ void printHostStack(FILE* f, int skip) {
     void* frames[48];
     const int n = backtrace(frames, 48);
     char** names = backtrace_symbols(frames, n);
+#ifdef __APPLE__
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    fprintf(f, "host call stack (thread %llu):\n", (unsigned long long)tid);
+#else
     fprintf(f, "host call stack (thread %ld):\n", long(gettid()));
+#endif
     for (int i = skip + 1; i < n; i++) {
         std::string line = names ? names[i] : "?";
         // "exe(_ZN2rt3fooEv+0x12) [0x...]": demangle the name between '(' and '+'
@@ -409,6 +432,9 @@ std::string describeAddr(u32 addr) {
 
 // The disc: an ISO/GCM or RVZ/WIA image (src/common/disc_image.cpp).
 static std::unique_ptr<disc::Image> s_image;
+static std::string s_discPath;
+
+const std::string& discPath() { return s_discPath; }
 
 bool discOpen(const std::string& path) {
     std::string err;
@@ -417,6 +443,7 @@ bool discOpen(const std::string& path) {
         logf("disc", "%s", err.c_str());
         return false;
     }
+    s_discPath = path;
     logf("disc", "%s image %s (%llu MiB)", s_image->kind(), path.c_str(), (unsigned long long)(s_image->size() >> 20));
     return s_image->size() > 0x440;
 }
@@ -737,8 +764,13 @@ static void setupLogOutput(int, char**) {
 static void logSessionHeader(int argc, char** argv) {
     using rt::logf;
     char exe[PATH_MAX] = "";
+#ifdef __APPLE__
+    uint32_t exeSz = sizeof exe;
+    if (_NSGetExecutablePath(exe, &exeSz) != 0) exe[0] = 0;
+#else
     const ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (n > 0) exe[n] = 0;
+#endif
     std::string built = "?";
     struct stat st{};
     if (stat(exe, &st) == 0) {

@@ -16,3 +16,6 @@ saves/
 red_two.log
 # The exe icon is the user's own image (res/icon.ico, built in when present)
 res/icon.ico
+# Extracted game videos and macOS Finder metadata
+extracted_movies/
+.DS_Store

@@ -27,6 +27,9 @@ hle     salBuildCommandList
 
 # Port options (src/runtime/hle_game.cpp): frame delta at retrace rates above 59.94 Hz
 hle     GameFrameDelta
+hle     MovieUpdate
+# Memory card: auto-create the initial save file on Slot A in the background (no first-boot prompt)
+hle     CardCheckSlot
 # Cheats (settings): infinite lives, invincibility (the player's craft is never destroyed)
 hle     LoseLife
 hle     CraftDestroy

@@ -150,6 +150,18 @@ void resetGame(bool toLauncher = false);  // main.cpp: the menu's reset (card wr
 // main.cpp: the window was closed or the menu's quit chosen: a save state being written and the
 // memory card's last writes reach their files, then the process ends
 [[noreturn]] void quitToDesktop();
+const std::string& discPath();  // main.cpp: path of the opened disc image
+
+// hle_game.cpp: documentary / teaser playback overlay (progress bar + pause menu)
+struct MovieOverlay {
+    bool active = false;
+    bool paused = false;
+    int pauseSel = 0;       // 0 = Fortsetzen, 1 = Beenden
+    double curSec = 0.0;
+    double totalSec = 0.0;
+    u64 lastActionTb = 0;   // last seek or pause/resume: bar hides 2 s after
+};
+MovieOverlay movieOverlay();
 
 // hle_game.cpp: the game's own passcode unlocks (two flag words of its progress block, kept in
 // its save), for the menu's cheats page

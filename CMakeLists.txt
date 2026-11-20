@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.25)
 project(red_two LANGUAGES C CXX)
 if(WIN32)
     enable_language(RC)
+elseif(APPLE)
+    enable_language(OBJC OBJCXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -102,8 +104,8 @@ if(MSVC)
     # clang-cl: generated code is huge and full of labels
     target_compile_options(r2game PRIVATE /O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable
         -fno-strict-aliasing /GS-)
-elseif(ANDROID)
-    # Android (AArch64, position-independent): no stack protector either (as below)
+elseif(ANDROID OR APPLE)
+    # Android (AArch64) and macOS (ARM64/x86_64): position-independent, no stack protector
     target_compile_options(r2game PRIVATE -O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable
         -fno-strict-aliasing -fno-stack-protector)
 else()
@@ -221,6 +223,12 @@ elseif(ANDROID)
     target_compile_options(red_two PRIVATE -fno-strict-aliasing -fno-stack-protector)
     target_link_options(red_two PRIVATE -Wl,-z,max-page-size=16384 -Wl,--no-undefined)
     target_link_libraries(red_two PRIVATE android log dl)
+elseif(APPLE)
+    # macOS: position-independent (required on Apple Silicon), no stack protector (as the
+    # generated code), export dynamic symbols for crash backtraces.
+    target_compile_options(red_two PRIVATE -fno-strict-aliasing -fno-stack-protector)
+    target_link_options(red_two PRIVATE -Wl,-export_dynamic)
+    target_link_libraries(red_two PRIVATE dl pthread)
 else()
     # Not a position-independent executable (save states hold return addresses into it, as
     # /DYNAMICBASE:NO on Windows); names in the dynamic symbol table for crash call stacks; the

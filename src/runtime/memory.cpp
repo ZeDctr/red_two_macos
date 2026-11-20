@@ -8,15 +8,25 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <mach-o/getsect.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#else
 #include <link.h>
+#endif
 #include <pthread.h>
 #include <signal.h>
 #include <sys/mman.h>
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #ifdef __ANDROID__
 #include <android/sharedmem.h>
-#include <link.h>
 #endif
 #endif
 
@@ -33,7 +43,7 @@ namespace rt {
 u8* g_base = nullptr;
 #ifdef _WIN32
 static HANDLE s_mem1 = nullptr;
-#else
+#elif !defined(__APPLE__)
 static int s_mem1 = -1;  // memfd: MEM1, mapped twice (0x80000000 and 0xC0000000)
 #endif
 static u8* s_stacks = nullptr;
@@ -97,7 +107,15 @@ static unsigned long hostThreadId() { return GetCurrentThreadId(); }
 static pthread_t s_guestThread{};
 static bool s_haveGuestThread = false;
 static bool onGuestThread() { return s_haveGuestThread && pthread_equal(pthread_self(), s_guestThread); }
+#ifdef __APPLE__
+static unsigned long hostThreadId() {
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    return (unsigned long)tid;
+}
+#else
 static unsigned long hostThreadId() { return (unsigned long)gettid(); }
+#endif
 #endif
 
 // The SDK's BATs map 0x80000000-0x8FFFFFFF (cached) and 0xC0000000-0xCFFFFFFF (uncached) to
@@ -168,9 +186,9 @@ static LONG CALLBACK onAccessViolation(EXCEPTION_POINTERS* ep) {
 }
 #else
 // SIGSEGV: guest memory as above; anything else goes to main.cpp's crash report
-#if defined(__aarch64__)
-// AArch64: the kernel puts the fault's syndrome (ESR) in a record of the signal frame's
-// reserved area; WnR (bit 6) says a data abort was a write.
+#if defined(__aarch64__) && !defined(__APPLE__)
+// AArch64 (Linux/Android): the kernel puts the fault's syndrome (ESR) in a record of the signal
+// frame's reserved area; WnR (bit 6) says a data abort was a write.
 static bool faultWasWrite(const ucontext_t* uc) {
     const u8* p = reinterpret_cast<const u8*>(uc->uc_mcontext.__reserved);
     const u8* end = p + sizeof uc->uc_mcontext.__reserved;
@@ -191,7 +209,13 @@ static bool faultWasWrite(const ucontext_t* uc) {
 #endif
 static void onSegv(int sig, siginfo_t* si, void* ucv) {
     const auto* uc = static_cast<const ucontext_t*>(ucv);
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
+    const bool write = ((uc->uc_mcontext->__es.__esr >> 6) & 1) != 0;
+    const void* at = reinterpret_cast<const void*>(uc->uc_mcontext->__ss.__pc);
+#elif defined(__APPLE__)
+    const bool write = (uc->uc_mcontext->__es.__err & 2) != 0;
+    const void* at = reinterpret_cast<const void*>(uc->uc_mcontext->__ss.__rip);
+#elif defined(__aarch64__)
     const bool write = faultWasWrite(uc);
     const void* at = reinterpret_cast<const void*>(uc->uc_mcontext.pc);
 #else
@@ -249,16 +273,32 @@ bool memInit() {
 // mapped into it twice, the locked cache and the port arena made accessible; pages past MEM1
 // become accessible when touched.
 static u8* reserve(u64 fixed, u64 size) {
+#ifdef __APPLE__
+    void* p = mmap(reinterpret_cast<void*>(fixed), size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#else
     void* p = mmap(reinterpret_cast<void*>(fixed), size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE,
                    -1, 0);
     if (p == MAP_FAILED || u64(p) != fixed) {
         if (p != MAP_FAILED) munmap(p, size);
         p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     }
+#endif
     return p == MAP_FAILED ? nullptr : static_cast<u8*>(p);
 }
 
 bool memInit() {
+#ifdef __APPLE__
+    u8* base = reserve(kFixedGuestBase, 0x100000000ull);
+    if (!base) return false;
+    // Commit MEM1 (and heap extension) at 0x80000000, then alias it at 0xC0000000 via mach_vm_remap.
+    if (mprotect(base + 0x80000000u, kMem1Mapped, PROT_READ | PROT_WRITE) != 0) return false;
+    mach_vm_address_t dst = mach_vm_address_t(base + 0xC0000000u);
+    vm_prot_t curProt = 0, maxProt = 0;
+    if (mach_vm_remap(mach_task_self(), &dst, kMem1Mapped, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(),
+                      mach_vm_address_t(base + 0x80000000u), FALSE, &curProt, &maxProt, VM_INHERIT_NONE) != KERN_SUCCESS)
+        return false;
+#else
 #ifdef __ANDROID__
     // (bionic has memfd_create from API 30; shared memory of the platform's own from 26)
     s_mem1 = ASharedMemory_create("red_two_mem1", kMem1Mapped);
@@ -271,6 +311,7 @@ bool memInit() {
     if (!base) return false;
     for (u32 at : {0x80000000u, 0xC0000000u})
         if (mmap(base + at, kMem1Mapped, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, s_mem1, 0) == MAP_FAILED) return false;
+#endif
     // (0x7E000000-0x7FFFFFFF is translated by vm.cpp and never touched at g_base + a.)
     if (mprotect(base + kLockedCache, 0x10000, PROT_READ | PROT_WRITE) != 0 ||
         mprotect(base + kPortArena, kPortArenaSize, PROT_READ | PROT_WRITE) != 0)
@@ -332,6 +373,18 @@ HostLayout hostLayout() {
             nullptr);
     }
     return {base, hash, u64(g_base), u64(s_stacks)};
+}
+#elif defined(__APPLE__)
+// macOS: the executable is PIE (required on Apple Silicon) and loaded at an ASLR-randomized base,
+// so save states load within the same session (as on Android).
+HostLayout hostLayout() {
+    static const auto* hdr = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+    static u64 hash = [] {
+        unsigned long sz = 0;
+        const uint8_t* seg = hdr ? getsegmentdata(hdr, "__TEXT", &sz) : nullptr;
+        return seg ? XXH3_64bits(seg, sz) : 0ull;
+    }();
+    return {u64(hdr), hash, u64(g_base), u64(s_stacks)};
 }
 #elif !defined(_WIN32)
 extern "C" char __executable_start;  // the linker's: the start of the image

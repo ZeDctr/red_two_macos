@@ -3,6 +3,7 @@
 #include "runtime.h"
 #include "settings.h"
 #include "hw/gx_fifo.h"
+#include "../common/disc_image.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,8 @@
 #include <cstring>
 #include <iterator>
 #include <map>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -34,6 +37,279 @@ static void frameDelta(Ctx& c) {
     const double dt = lastTb ? double(tb - lastTb) / double(kTbClock) : 1.0 / hz;
     lastTb = tb;
     c.f[1] = c.ps1[1] = rsingle(std::clamp(dt, 0.00025, 1.0 / 29.97));
+}
+
+// MovieUpdate (0x7FD8300C): advances a Factor 5 .movie player by dt (f1). Cutscene and level
+// movies pass GameFrameDelta (0x7FDE8288), but the documentary / teaser player (0x7FD71564)
+// passes a hardcoded 1/60 s constant, so at retrace rates above 59.94 Hz the video runs fast
+// and outruns its audio. Replace that fixed step with real elapsed time, and allow +/-5 s
+// seeking (Left/Right) + an on-screen progress bar and timestamp overlay.
+namespace {
+struct MovieIndex {
+    std::mutex mu;
+    u32 discStart = 0;
+    bool building = false;
+    bool ready = false;
+    std::vector<std::pair<u32, u32>> frames;  // (fileOffset, frameSize) per frame
+} s_movieIdx;
+
+struct MovieOverlayState {
+    std::mutex mu;
+    u64 lastActiveTb = 0;
+    bool paused = false;
+    int pauseSel = 0;
+    double curSec = 0.0;
+    double totalSec = 0.0;
+    u64 lastActionTb = 0;
+} s_movieOverlay;
+
+static bool s_moviePaused = false;
+
+void ensureMovieIndex(u32 discStart, u32 totalFrames, u32 firstOff, u32 firstSize) {
+    {
+        std::lock_guard lk(s_movieIdx.mu);
+        if (s_movieIdx.discStart == discStart && (s_movieIdx.ready || s_movieIdx.building)) return;
+        s_movieIdx.discStart = discStart;
+        s_movieIdx.building = true;
+        s_movieIdx.ready = false;
+        s_movieIdx.frames.clear();
+    }
+    const std::string path = discPath();
+    std::thread([path, discStart, totalFrames, firstOff, firstSize] {
+        std::vector<std::pair<u32, u32>> idx;
+        std::string err;
+        auto img = disc::open(path, err);
+        if (img && totalFrames > 0 && totalFrames < 1000000) {
+            idx.reserve(totalFrames);
+            u32 off = firstOff, sz = firstSize;
+            for (u32 i = 0; i < totalFrames && sz >= 32; i++) {
+                idx.emplace_back(off, sz);
+                u8 hdr[4];
+                if (!img->read(u64(discStart) + u64(off), hdr, 4)) break;
+                const u32 nextSz = u32(hdr[0]) << 24 | u32(hdr[1]) << 16 | u32(hdr[2]) << 8 | hdr[3];
+                off += sz;
+                sz = nextSz;
+            }
+        }
+        std::lock_guard lk(s_movieIdx.mu);
+        if (s_movieIdx.discStart == discStart) {
+            s_movieIdx.frames = std::move(idx);
+            s_movieIdx.ready = !s_movieIdx.frames.empty();
+            s_movieIdx.building = false;
+        }
+    }).detach();
+}
+}  // namespace
+
+MovieOverlay movieOverlay() {
+    std::lock_guard lk(s_movieOverlay.mu);
+    MovieOverlay out;
+    const u64 now = tbNow();
+    if (s_movieOverlay.lastActiveTb && now - s_movieOverlay.lastActiveTb < kTbClock / 4) {
+        out.active = true;
+        out.paused = s_movieOverlay.paused;
+        out.pauseSel = s_movieOverlay.pauseSel;
+        out.curSec = s_movieOverlay.curSec;
+        out.totalSec = s_movieOverlay.totalSec;
+        out.lastActionTb = s_movieOverlay.lastActionTb;
+    }
+    return out;
+}
+
+void hle_MovieUpdate(Ctx& c) {
+    if (c.lr == 0x7FD71568u) {
+        const u32 p = c.r[3];
+        const u32 hdr = p ? rd32(p + 0x70u) : 0;
+        const bool exiting = rd8(c.r[13] + 0xFFFFB590u) != 0;
+        if (hdr && rd8(p + 0xE9u) == 0 && !exiting) {
+            const double fps = s2d(rd32(hdr + 0x04u));
+            const u32 totalFrames = rd32(hdr + 0x0Cu);
+            const u32 curFrame = rd32(p + 0xE4u);
+            const u32 discStart = rd32(p + 0x38u);
+            const u32 firstSize = rd32(hdr + 0x14u);
+            const u32 firstOff = rd32(hdr + 0x18u);
+            const u64 now = tbNow();
+
+            static u32 s_lastPlayer = 0;
+            static int s_pendingFrames = 0;
+            static int s_lastDir = 0;
+            static u64 s_nextRepeatTb = 0;
+            static int s_pauseSel = 0;
+            static int s_lastVert = 0;
+            static bool s_startWas = false;
+            static u64 s_lastDtTb = 0;
+
+            if (p != s_lastPlayer) {
+                s_lastPlayer = p;
+                s_moviePaused = false;
+                s_pauseSel = 0;
+                s_pendingFrames = 0;
+                s_lastDir = 0;
+                s_lastVert = 0;
+                s_lastDtTb = 0;
+                std::lock_guard lk(s_movieOverlay.mu);
+                s_movieOverlay.paused = false;
+                s_movieOverlay.pauseSel = 0;
+                s_movieOverlay.lastActionTb = 0;
+            }
+
+            if (discStart && totalFrames > 0 && fps > 1.0) {
+                ensureMovieIndex(discStart, totalFrames, firstOff, firstSize);
+
+                // Intercept the game's exit button bits (r31 + 0x6699, bits 0x10 / 0x20) so a
+                // button press opens our pause menu instead of immediately aborting playback.
+                const u32 menuObj = c.r[31];
+                const u8 rawBtn = menuObj ? rd8(menuObj + 0x6699u) : 0;
+                if (menuObj) wr8(menuObj + 0x6699u, rawBtn & ~0x30u);
+
+                bool confirmPressed = (rawBtn & 0x30u) != 0;
+                const PadState pad = padState(0);
+                const bool startNow = !gfx::menuOpen() && (pad.buttons & 0x1000u) != 0;
+                if (startNow && !s_startWas) confirmPressed = true;
+                s_startWas = startNow;
+
+                if (gfx::menuOpen()) confirmPressed = false;
+
+                if (!s_moviePaused && confirmPressed) {
+                    s_moviePaused = true;
+                    s_pauseSel = 0;  // "Fortsetzen" selected by default
+                    setAudioSpeed(1.0, true);
+                    std::lock_guard lk(s_movieOverlay.mu);
+                    s_movieOverlay.lastActiveTb = now;
+                    s_movieOverlay.paused = true;
+                    s_movieOverlay.pauseSel = 0;
+                    s_movieOverlay.curSec = double(curFrame) / fps;
+                    s_movieOverlay.totalSec = double(totalFrames) / fps;
+                    s_movieOverlay.lastActionTb = now;
+                    return;
+                }
+
+                if (s_moviePaused) {
+                    if (!gfx::menuOpen()) {
+                        const bool up = (pad.buttons & 0x0008u) != 0 || pad.stickY > 188;
+                        const bool down = (pad.buttons & 0x0004u) != 0 || pad.stickY < 68;
+                        const int vert = down ? 1 : up ? -1 : 0;
+                        if (vert != 0 && vert != s_lastVert) {
+                            s_pauseSel = (vert > 0) ? 1 : 0;
+                        }
+                        s_lastVert = vert;
+
+                        if (confirmPressed) {
+                            if (s_pauseSel == 0) {
+                                // Fortsetzen
+                                s_moviePaused = false;
+                                s_lastDtTb = now;
+                                setAudioSpeed(1.0, false);
+                                std::lock_guard lk(s_movieOverlay.mu);
+                                s_movieOverlay.paused = false;
+                                s_movieOverlay.lastActionTb = now;
+                            } else {
+                                // Beenden: hand the exit bit back to the game's native exit path
+                                s_moviePaused = false;
+                                setAudioSpeed(1.0, false);
+                                if (menuObj) wr8(menuObj + 0x6699u, rawBtn | 0x20u);
+                                std::lock_guard lk(s_movieOverlay.mu);
+                                s_movieOverlay.paused = false;
+                                s_movieOverlay.lastActiveTb = 0;
+                                f_7FD8300C_orig(c);
+                                return;
+                            }
+                        }
+                    }
+                    if (s_moviePaused) {
+                        setAudioSpeed(1.0, true);
+                        std::lock_guard lk(s_movieOverlay.mu);
+                        s_movieOverlay.lastActiveTb = now;
+                        s_movieOverlay.paused = true;
+                        s_movieOverlay.pauseSel = s_pauseSel;
+                        s_movieOverlay.curSec = double(curFrame) / fps;
+                        s_movieOverlay.totalSec = double(totalFrames) / fps;
+                        return;
+                    }
+                }
+
+                {
+                    std::lock_guard lk(s_movieOverlay.mu);
+                    s_movieOverlay.lastActiveTb = now;
+                    s_movieOverlay.paused = false;
+                    s_movieOverlay.curSec = double(curFrame) / fps;
+                    s_movieOverlay.totalSec = double(totalFrames) / fps;
+                }
+
+                // Left / Right (D-pad, stick or arrow keys / A / D): +/- 5 seconds with auto-repeat
+                if (!gfx::menuOpen()) {
+                    const bool left = (pad.buttons & 0x0001u) != 0 || pad.stickX < 68;
+                    const bool right = (pad.buttons & 0x0002u) != 0 || pad.stickX > 188;
+                    const int dir = right ? 1 : left ? -1 : 0;
+                    if (dir != 0) {
+                        const bool trigger = (dir != s_lastDir) || (now >= s_nextRepeatTb);
+                        if (trigger) {
+                            const int stepFrames = std::max(1, int(std::lround(5.0 * fps)));
+                            s_pendingFrames += dir * stepFrames;
+                            s_nextRepeatTb = now + (dir != s_lastDir ? (kTbClock * 40 / 100) : (kTbClock * 25 / 100));
+                            std::lock_guard lk(s_movieOverlay.mu);
+                            s_movieOverlay.lastActionTb = now;
+                        }
+                    } else {
+                        s_nextRepeatTb = 0;
+                    }
+                    s_lastDir = dir;
+                }
+
+                if (s_pendingFrames != 0) {
+                    std::pair<u32, u32> loc{0, 0};
+                    u32 target = 0;
+                    bool haveTarget = false;
+                    {
+                        std::lock_guard lk(s_movieIdx.mu);
+                        if (s_movieIdx.discStart == discStart && s_movieIdx.ready && !s_movieIdx.frames.empty()) {
+                            const int t = std::clamp(int(curFrame) + s_pendingFrames, 0, int(s_movieIdx.frames.size()) - 1);
+                            target = u32(t);
+                            loc = s_movieIdx.frames[target];
+                            haveTarget = true;
+                        }
+                    }
+                    if (haveTarget) {
+                        if (rd8(p + 0x44u) != 0) {
+                            wr8(p + 0x45u, 0);
+                        } else {
+                            wr32(p + 0x48u, loc.first);   // nextReadOffset
+                            wr32(p + 0x4Cu, loc.second);  // nextReadSize
+                            wr32(p + 0x50u, target);      // readFrameIdx
+                            wr32(p + 0xE4u, target);      // currentFrame
+                            wr32(p + 0x5Cu, 0);           // videoReadIdx
+                            wr32(p + 0x60u, 0);           // audioReadIdx
+                            wr32(p + 0x64u, 0);           // writeIdx
+                            wr32(p + 0xDCu, 0);           // accum = 0.0f
+                            wr8(p + 0x45u, 1);            // resume streaming
+                            s_pendingFrames = 0;
+                            std::lock_guard lk(s_movieOverlay.mu);
+                            s_movieOverlay.curSec = double(target) / fps;
+                            s_movieOverlay.lastActionTb = now;
+                        }
+                    }
+                }
+            }
+            if (viRate() > 60.5) {
+                const double dt = s_lastDtTb ? double(now - s_lastDtTb) / double(kTbClock) : 1.0 / viRate();
+                s_lastDtTb = now;
+                const double step = dt > 0.25 ? 1.0 / viRate() : std::clamp(dt, 0.00025, 1.0 / 29.97);
+                c.f[1] = c.ps1[1] = rsingle(step);
+            }
+        } else if (s_moviePaused) {
+            s_moviePaused = false;
+            setAudioSpeed(1.0, false);
+        }
+    }
+    f_7FD8300C_orig(c);
+}
+
+// CardCheckSlot (0x7FC06CA8): on Slot A, enable the game's built-in autoCreate flag (r4 = 1)
+// so a freshly formatted card gets its initial Rogue Leader save file silently in the background
+// instead of prompting on first boot.
+void hle_CardCheckSlot(Ctx& c) {
+    if (c.r[3] == 0) c.r[4] = 1;
+    f_7FC06CA8_orig(c);
 }
 
 // The player's craft (0x7FDEFE14 in missions), or 0 when that pointer holds something else:
@@ -131,6 +407,8 @@ void hle_GameFrameDelta(Ctx& c) {
     } else if (s.skipLogos && bootScreen()) {
         c.f[1] = c.ps1[1] = rsingle(c.f[1] * 16.0);
         setAudioSpeed(16.0, true);
+    } else if (s_moviePaused) {
+        setAudioSpeed(1.0, true);
     } else {
         setAudioSpeed(1.0, false);
     }

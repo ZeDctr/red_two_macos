@@ -187,7 +187,11 @@ struct Curl {
 Curl& curl() {
     static Curl c = [] {
         Curl c;
+#ifdef __APPLE__
+        for (const char* name : {"libcurl.4.dylib", "libcurl.dylib"})
+#else
         for (const char* name : {"libcurl.so.4", "libcurl-gnutls.so.4", "libcurl.so"})
+#endif
             if ((c.lib = dlopen(name, RTLD_NOW | RTLD_LOCAL))) break;
         if (!c.lib) {
             logf("ra", "libcurl not found: RetroAchievements cannot reach the server");
@@ -514,6 +518,8 @@ void ensureClient() {
     s_userAgent = std::string("RedTwo/1.0 (Windows) ") + clause;
 #elif defined(__ANDROID__)
     s_userAgent = std::string("RedTwo/1.0 (Android) ") + clause;
+#elif defined(__APPLE__)
+    s_userAgent = std::string("RedTwo/1.0 (macOS) ") + clause;
 #else
     s_userAgent = std::string("RedTwo/1.0 (Linux) ") + clause;
 #endif

@@ -2509,6 +2509,16 @@ void menuImGuiInit(const void*) {
     for (const char* f : {"/system/fonts/RobotoCondensed-Regular.ttf", "/system/fonts/Roboto-Regular.ttf",
                           "/system/fonts/NotoSans-Regular.ttf", "/system/fonts/DroidSans.ttf"})
         fonts.push_back(f);
+#elif defined(__APPLE__)
+    if (const char* base = SDL_GetBasePath()) {
+        fonts.push_back(std::string(base) + "../Resources/font.ttf");
+        fonts.push_back(std::string(base) + "font.ttf");
+    }
+    for (const char* f : {"/System/Library/Fonts/Supplemental/Arial Narrow.ttf",
+                          "/System/Library/Fonts/Supplemental/DIN Alternate Bold.ttf",
+                          "/System/Library/Fonts/SFNS.ttf",
+                          "/System/Library/Fonts/Supplemental/Arial.ttf"})
+        fonts.push_back(f);
 #else
     if (const char* base = SDL_GetBasePath()) {
         fonts.push_back(std::string(base) + "../share/red-two/font.ttf");
@@ -2733,6 +2743,91 @@ void menuDraw() {
         panel(fg, ImVec2(at.x - 8.f * ui, at.y - 5.f * ui), ImVec2(at.x + tw + 10.f * ui, at.y + px + 5.f * ui), 6.f * ui,
               IM_COL32(6, 14, 30, 170), IM_COL32(2, 6, 14, 190), alpha(kGold, 140), 1.f);
         drawText(fg, s_font, px, at, kGold, buf, 2.f * ui);
+    }
+    // documentary / teaser video overlay: auto-hiding progress bar (2 s) + centered pause menu
+    if (!s_open) {
+        const MovieOverlay mv = movieOverlay();
+        if (mv.active && mv.totalSec > 0.0) {
+            const double actionAge = mv.lastActionTb ? double(now - mv.lastActionTb) / double(kTbClock) : 99.0;
+            const bool showBar = mv.paused || actionAge < 2.0;
+            if (showBar) {
+                const float barA = mv.paused ? 1.f : (actionAge < 1.65 ? 1.f : float((2.0 - actionAge) / 0.35));
+                const int curS = std::max(0, int(mv.curSec));
+                const int totS = std::max(1, int(mv.totalSec));
+                char timeBuf[32];
+                snprintf(timeBuf, sizeof timeBuf, "%02d:%02d / %02d:%02d", curS / 60, curS % 60, totS / 60, totS % 60);
+
+                const float barW = std::min(io.DisplaySize.x - 64.f * ui, 720.f * ui);
+                const float barH = 44.f * ui;
+                const float x0 = (io.DisplaySize.x - barW) * 0.5f;
+                const float y0 = io.DisplaySize.y - barH - 24.f * ui;
+                const float padX = 18.f * ui;
+                const float px = 19.f * ui;
+
+                panel(fg, ImVec2(x0, y0), ImVec2(x0 + barW, y0 + barH), 8.f * ui,
+                      alpha(IM_COL32(6, 14, 30, 255), int(190 * barA)), alpha(IM_COL32(2, 6, 14, 255), int(215 * barA)),
+                      alpha(kGold, int(160 * barA)), 1.25f * ui);
+
+                const float timeW = textWidth(s_font, px, timeBuf, 1.5f * ui);
+                drawText(fg, s_font, px, ImVec2(x0 + padX, y0 + (barH - px) * 0.5f), alpha(kGold, int(255 * barA)), timeBuf, 1.5f * ui);
+
+                const float trackX0 = x0 + padX + timeW + 20.f * ui;
+                const float trackX1 = x0 + barW - padX;
+                if (trackX1 > trackX0 + 40.f * ui) {
+                    const float trackH = 7.f * ui;
+                    const float trackY0 = y0 + (barH - trackH) * 0.5f;
+                    const float frac = float(std::clamp(mv.curSec / mv.totalSec, 0.0, 1.0));
+                    const float fillX = trackX0 + (trackX1 - trackX0) * frac;
+                    fg->AddRectFilled(ImVec2(trackX0, trackY0), ImVec2(trackX1, trackY0 + trackH),
+                                      IM_COL32(255, 255, 255, int(45 * barA)), trackH * 0.5f);
+                    if (fillX > trackX0 + 1.f) {
+                        fg->AddRectFilled(ImVec2(trackX0, trackY0), ImVec2(fillX, trackY0 + trackH),
+                                          alpha(kGold, int(255 * barA)), trackH * 0.5f);
+                    }
+                    fg->AddCircleFilled(ImVec2(fillX, trackY0 + trackH * 0.5f), 5.5f * ui,
+                                        IM_COL32(255, 245, 210, int(255 * barA)));
+                }
+            }
+
+            if (mv.paused) {
+                const float boxW = 340.f * ui;
+                const float boxH = 216.f * ui;
+                const float cx = io.DisplaySize.x * 0.5f;
+                const float cy = io.DisplaySize.y * 0.5f;
+                const float bx0 = cx - boxW * 0.5f;
+                const float by0 = cy - boxH * 0.5f;
+
+                panel(fg, ImVec2(bx0, by0), ImVec2(bx0 + boxW, by0 + boxH), 12.f * ui,
+                      IM_COL32(8, 18, 38, 225), IM_COL32(2, 6, 14, 240), alpha(kGold, 210), 1.5f * ui);
+
+                // Large "PAUSE" heading
+                const float titlePx = 38.f * ui;
+                const float titleW = textWidth(s_fontBig ? s_fontBig : s_font, titlePx, "PAUSE", 4.f * ui);
+                drawText(fg, s_fontBig ? s_fontBig : s_font, titlePx,
+                         ImVec2(cx - titleW * 0.5f, by0 + 22.f * ui), kGold, "PAUSE", 4.f * ui);
+
+                const float sepY = by0 + 76.f * ui;
+                fg->AddLine(ImVec2(bx0 + 26.f * ui, sepY), ImVec2(bx0 + boxW - 26.f * ui, sepY), alpha(kGold, 110), 1.f * ui);
+
+                // Selectable rows: Continue (0), End (1)
+                const char* items[2] = {"Continue", "End"};
+                const float rowH = 48.f * ui;
+                const float rowPx = 24.f * ui;
+                for (int i = 0; i < 2; i++) {
+                    const bool sel = (mv.pauseSel == i);
+                    const float ry0 = sepY + 18.f * ui + float(i) * (rowH + 10.f * ui);
+                    if (sel) {
+                        fg->AddRectFilled(ImVec2(bx0 + 22.f * ui, ry0), ImVec2(bx0 + boxW - 22.f * ui, ry0 + rowH),
+                                          alpha(kGold, 48), 7.f * ui);
+                        fg->AddRect(ImVec2(bx0 + 22.f * ui, ry0), ImVec2(bx0 + boxW - 22.f * ui, ry0 + rowH),
+                                    alpha(kGold, 210), 7.f * ui, 0, 1.5f * ui);
+                    }
+                    const float tw = textWidth(s_font, rowPx, items[i], 2.f * ui);
+                    const ImU32 col = sel ? kGold : IM_COL32(215, 225, 240, 220);
+                    drawText(fg, s_font, rowPx, ImVec2(cx - tw * 0.5f, ry0 + (rowH - rowPx) * 0.5f), col, items[i], 2.f * ui);
+                }
+            }
+        }
     }
     // save state messages: 2.5 s at the top, fading out
     if (!s_toast.empty()) {
