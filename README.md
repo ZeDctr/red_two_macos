@@ -11,8 +11,12 @@ own build.
 
 ### Quick Start (Release `.app`)
 1. Download `Red_Two_macOS_arm64.zip` from the [Releases](../../releases) page and unzip `Red Two.app`.
-2. Right-click → **Open** (first launch only, since the bundle is ad-hoc signed).
-3. Select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
+2. **First launch (Gatekeeper / ad-hoc signed app)**: because the app is ad-hoc signed and not notarized by Apple, macOS will block it on first launch (or say it is "damaged"). Clear the quarantine flag once in Terminal:
+   ```bash
+   xattr -cr "/path/to/Red Two.app"
+   ```
+   *(Alternatively, try opening it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.)*
+3. Open `Red Two.app` and select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
 4. Optional: copy a Dolphin HD texture pack (`GSWE64` folder) into `~/Library/Application Support/Red Two/textures/` or pick its folder under **F1 → MODS → Texture pack folder**.
 
 ### Building on macOS (Apple Silicon)
