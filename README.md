@@ -30,6 +30,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 - **Streamlined Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu.
 - **Cutscene Skip**: hold B to skip cutscenes.
 - **Live V-Sync Toggle** in the Display menu.
+- **Automatic Memory Card Setup**: automatically formats the virtual Memory Card and creates the initial save file on first launch without prompting.
 - **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
 ## Controls & Files
