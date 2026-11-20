@@ -55,6 +55,8 @@ build/macos/red_two --disc "<your Rogue Leader.rvz>"
 
 Based on [gminustwo/red_two](https://github.com/gminustwo/red_two) and [Aurora](https://github.com/dolphin-emu/aurora). See the upstream repository for technical details on the static recompilation architecture and Windows/Linux builds.
 
+The macOS port and quality-of-life enhancements in this fork were developed with the assistance of Google Gemini.
+
 ## Legal
 
 Red Two is released under the [MIT License](LICENSE). It covers this repository's own code
