@@ -21,16 +21,16 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 ## Features & macOS Enhancements
 
-- **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, including Aurora shader logic-op fallback (`patches/aurora/0034-logic-op-fallback.patch`).
-- **Standalone macOS `.app` bundle** with bundled dylibs, custom icon, and macOS Game Mode support.
-- **Fullscreen Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, and pause function.
-- **Audio Commentary Controls**: press **L3** or **C** to pause/resume active commentary streams with automatic BGM/SFX ducking restoration and a subtle bottom-center HUD indicator.
+- **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3.
+- **Standalone macOS App-bundle** with bundled dylibs, custom icon and macOS Game Mode support.
+- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar and pause function.
+- **Audio Commentary Controls and overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay.
 - **Art Gallery Captions**: bottom-center title and slide counter overlay for all 27 concept art pieces and renders.
 - **Nintendo Switch Pro Controller** auto-detection & button prompts (`SWITCH`), plus a generic Right Analog Stick icon replacing the baked GameCube C-stick in *Select Craft*.
 - **Streamlined Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu.
-- **Cutscene Skip**: hold B to skip cutscenes.
-- **Live V-Sync Toggle** in the Display menu.
-- **Automatic Memory Card Setup**: automatically formats the virtual Memory Card and creates the initial save file on first launch without prompting.
+- **Cutscene Skip**: hold button to skip cutscenes.
+- **V-Sync Toggle** in the Display menu.
+- **Automatic Memory Card Setup**: formats the virtual Memory Card and creates the initial save file on first launch without prompting.
 - **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
 ## Controls & Files
