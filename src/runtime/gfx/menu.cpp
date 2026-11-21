@@ -2773,9 +2773,19 @@ void setOpen(bool open) {
 bool menuOpen() { return s_open; }
 bool launcherShowing() { return s_launcher; }
 
+#ifdef __APPLE__
+static bool s_enteredFullscreen = false;
+static int s_fsSettleFrames = 0;
+static u64 s_launcherOpenTb = 0;
+#endif
+
 void launcherOpen() {
     s_launcher = true;
     s_launch = false;
+#ifdef __APPLE__
+    s_launcherOpenTb = tbNow();
+    s_fsSettleFrames = 0;
+#endif
     s_section = Display;
     s_rowSel[Display] = 0;  // Start game: Enter / A right away
     s_usingPad = SDL_HasGamepad();  // (button hints; the first input decides after that)
@@ -2793,6 +2803,17 @@ bool launcherFrame() {
     if (!ctx || !ctx->WithinFrameScope) return false;
     modsPoll();
     updatePoll();
+#ifdef __APPLE__
+    if (settings::get().fullscreen) {
+        const double sinceOpen = double(tbNow() - s_launcherOpenTb) / double(kTbClock);
+        if (s_enteredFullscreen) s_fsSettleFrames++;
+        if (s_fsSettleFrames < 4 && sinceOpen < 2.5) {
+            const ImVec2 disp = ImGui::GetIO().DisplaySize;
+            ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), disp, IM_COL32(0, 0, 0, 255));
+            return false;
+        }
+    }
+#endif
     const float t = float(double(SDL_GetTicks()) / 1000.0);
     drawMenu(settings::get(), t);
     if (s_open) bindSelfTest();
@@ -2898,6 +2919,10 @@ void menuImGuiInit(const void*) {
 
 void menuEvent(const void* p) {
     const SDL_Event& e = *static_cast<const SDL_Event*>(p);
+#ifdef __APPLE__
+    if (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN) s_enteredFullscreen = true;
+    if (e.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) s_enteredFullscreen = false;
+#endif
     if (rebindingNow()) return;  // rebinding takes these
     if (s_launcher) {  // no opening or closing: Esc only leaves the folder browser / the disc page
         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_ESCAPE && !s_textEditing) menuStepBack();
