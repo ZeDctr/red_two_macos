@@ -33,6 +33,10 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 - **Automatic Memory Card Setup**: formats the virtual Memory Card and creates the initial save file on first launch without prompting.
 - **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
+### Feature Overview Video
+
+[![Red Two macOS Feature Overview](https://img.youtube.com/vi/6eG80jNR-4Y/hqdefault.jpg)](https://www.youtube.com/watch?v=6eG80jNR-4Y)
+
 ## Controls & Files
 
 - **In-game menu**: press **F1** *(or **Fn + F1** on Mac keyboards)* or **Back / Select / Minus** on your controller.
