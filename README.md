@@ -23,19 +23,21 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 - **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3.
 - **Standalone macOS App-bundle** with bundled dylibs, custom icon and macOS Game Mode support.
-- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar and pause function.
-- **Audio Commentary Controls and overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay.
-- **Art Gallery Captions**: bottom-center title and slide counter overlay for all 27 concept art pieces and renders.
+- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, mouse support, and **native in-game font UI** for the pause menu and timestamps.
+- **Redesigned Music Hall**: clean paginated track list for all 114 tracks with track durations and live elapsed/remaining playback timers.
+- **Audio Commentary Controls & Overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay, with game-styled HUD typography.
+- **Art Gallery Captions**: native in-game font title and slide counter for all 27 concept art pieces and renders.
 - **Nintendo Switch Pro Controller** auto-detection & button prompts (`SWITCH`), plus a generic Right Analog Stick icon replacing the baked GameCube C-stick in *Select Craft*.
-- **Streamlined Menu**: *Special Features*, *Rogue Leaders*, *Passcodes*, *Options*, and **Quit** directly accessible from the Main Menu.
-- **Cutscene Skip**: hold button to skip cutscenes.
+- **Streamlined Menu & Mouse Navigation**: *Special Features* and *Rogue Leaders* promoted directly into the Main Menu (*Start*, *Special Features*, *Rogue Leaders*, *Options* with *Passcodes*, *Quit*), with mouse hover/click support across front-end menus.
+- **Faster Boot & Cutscene Skip**: eliminated multi-second black-screen delays before the 3D intro with *Fast loading*, extended *Skip intro logos* to cover initial splash screens, and game-styled `HOLD TO SKIP` prompt.
+- **Smooth Cutscene & Credits Audio**: immediate safepoint AI/MusyX catch-up prevents choppy/stuttering music both with and without V-Sync.
 - **V-Sync Toggle** in the Display menu.
 - **Automatic Memory Card Setup**: formats the virtual Memory Card and creates the initial save file on first launch without prompting.
 - **All upstream Red Two features**: high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
 ### Feature Overview Video
 
-[![Red Two macOS Feature Overview](https://img.youtube.com/vi/6eG80jNR-4Y/hqdefault.jpg)](https://www.youtube.com/watch?v=6eG80jNR-4Y)
+[![Red Two macOS Feature Overview](https://img.youtube.com/vi/BdarOFSgR0Y/hqdefault.jpg)](https://www.youtube.com/watch?v=BdarOFSgR0Y)
 
 ## Controls & Files
 
