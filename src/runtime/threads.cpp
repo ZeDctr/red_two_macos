@@ -432,6 +432,16 @@ void safepoint(Ctx& c, u32 pc) {
         decAck();
         deliverException(c, 8, pc);
     }
+    // Catch up any overdue AI audio blocks immediately (e.g. after a 16.67 ms VSync wait),
+    // alternating DSP/AI interrupts and onAi() without waiting on host timers.
+    for (int n = 0; n < 24 && (c.msr & kMsrEE) && aiCatchUpPending(); n++) {
+        if (piPending()) {
+            deliverException(c, 4, pc);
+            continue;
+        }
+        if (!aiCatchUpStep()) break;
+        if (piPending()) deliverException(c, 4, pc);
+    }
     // more to take once the handler is done (it runs with interrupts off)
     if (g_irqLine && (c.msr & kMsrEE)) g_irqPending = 1;
 }

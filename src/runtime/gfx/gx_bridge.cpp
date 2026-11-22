@@ -135,6 +135,7 @@ void pollEvents() {
         }
         if (e->type == AURORA_SDL_EVENT) {
             menuEvent(&e->sdl);
+            mouseMenuEvent(&e->sdl);
             touchEvent(&e->sdl);
             audio::deviceEvent(&e->sdl);
         }

@@ -102,3 +102,6 @@
 7FD6C23C MainMenuUpdate          # (menuObj r3) handles input on the front-end Main Menu
 7FD6C4A0 OptionsMenuSetup        # (menuObj r3) builds the Options menu (screen 0x06)
 7FD6C86C OptionsMenuUpdate       # (menuObj r3) handles input on the Options menu (screen 0x06)
+7FD71670 MusicHallSetup          # (menuObj r3) builds the Music Hall / Art Gallery screen (screen 0x14; mode 0 = Music Hall, 1 = Art Gallery)
+7FD71A14 MusicHallUpdate         # (menuObj r3) handles input and playback on the Music Hall / Art Gallery screen (screen 0x14)
+7FD839A0 MovieEndDraw            # finishes drawing a Factor 5 .movie quad; called right after the full-screen video quad in 0x7FD7109C

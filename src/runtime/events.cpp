@@ -181,11 +181,16 @@ void eventsInit() {
 
 void schedule(int id, u64 at) {
     if (!at) at = 1;
-    std::lock_guard lk(s_mu);
-    s_due[id] = at;
-    const u64 before = s_earliest.load();
-    recomputeEarliest();
-    if (s_earliest.load() < before) wakeTimer();
+    bool dueNow = false;
+    {
+        std::lock_guard lk(s_mu);
+        s_due[id] = at;
+        const u64 before = s_earliest.load();
+        recomputeEarliest();
+        if (s_earliest.load() < before) wakeTimer();
+        dueNow = at <= tbNow();
+    }
+    if (dueNow) raisePending();
 }
 
 void unschedule(int id) {

@@ -1089,6 +1089,7 @@ int main(int argc, char** argv) {
     }
     audio::init();
     hwInit();
+    bootSkipInit();
     c.msr = 0x2032;  // FP, IR, DR, RI; interrupts off until the OS enables them
     logf("boot", "%u recompiled functions; jumping to %s", g_funcCount, describeAddr(entry).c_str());
     threadsRun(entry);  // the boot fiber runs the game; this thread only takes save states now

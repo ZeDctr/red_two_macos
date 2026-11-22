@@ -76,9 +76,10 @@ ImVec4 vec(ImU32 c, float a = -1.f) {
     return v;
 }
 
-ImFont* s_font = nullptr;     // body text
-ImFont* s_fontBig = nullptr;  // titles
-constexpr float kFontPx = 34.f, kBigPx = 72.f;
+ImFont* s_font = nullptr;      // body text
+ImFont* s_fontBig = nullptr;   // titles
+ImFont* s_fontGame = nullptr;  // condensed bold italic matching the game's menu font
+constexpr float kFontPx = 34.f, kBigPx = 72.f, kGameFontPx = 48.f;
 
 void applyStyle() {
     ImGuiStyle& st = ImGui::GetStyle();
@@ -2914,6 +2915,31 @@ void menuImGuiInit(const void*) {
         if (s_font && s_fontBig) break;
     }
     if (!s_font) s_font = s_fontBig = io.Fonts->AddFontDefault();
+    {
+        static const char* const kGameFonts[] = {
+#ifdef __APPLE__
+            "/System/Library/Fonts/Supplemental/Arial Narrow Bold Italic.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Narrow Italic.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+#elif defined(_WIN32)
+            "C:/Windows/Fonts/ARIALNBI.TTF",
+            "C:/Windows/Fonts/ARIALNB.TTF",
+#else
+            "/usr/share/fonts/TTF/DejaVuSansCondensed-BoldOblique.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-BoldOblique.ttf",
+#endif
+        };
+        for (const char* path : kGameFonts) {
+            FILE* f = fopen(path, "rb");
+            if (!f) continue;
+            fclose(f);
+            ImFontConfig cfg;
+            cfg.OversampleH = 2;
+            s_fontGame = io.Fonts->AddFontFromFileTTF(path, kGameFontPx, &cfg);
+            if (s_fontGame) break;
+        }
+        if (!s_fontGame) s_fontGame = s_font;
+    }
     applyStyle();
 }
 
@@ -3130,121 +3156,91 @@ void menuDraw() {
     if (!s_open) {
         const MovieOverlay mv = movieOverlay();
         if (mv.active && mv.totalSec > 0.0) {
+            const float winW = io.DisplaySize.x;
+            const float winH = io.DisplaySize.y;
+            const u32 xfbLines = viXfbLines();
+            const float logicalH = (xfbLines >= 200u && xfbLines <= 528u) ? float(xfbLines) : 448.f;
+            const float aspect43W = winH * (4.f / 3.f);
+            const float boxW = std::min(winW, aspect43W);
+            const float boxH = (winW < aspect43W) ? (winW * (3.f / 4.f)) : winH;
+            const float offsetX = (winW - boxW) * 0.5f;
+            const float offsetY = (winH - boxH) * 0.5f;
+            const float sx = boxW / 640.f;
+            const float sy = boxH / logicalH;
+
             const double actionAge = mv.lastActionTb ? double(now - mv.lastActionTb) / double(kTbClock) : 99.0;
             const bool showBar = mv.paused || actionAge < 2.0;
             if (showBar) {
-                const float barA = mv.paused ? 1.f : (actionAge < 1.65 ? 1.f : float((2.0 - actionAge) / 0.35));
-                const int curS = std::max(0, int(mv.curSec));
-                const int totS = std::max(1, int(mv.totalSec));
-                char timeBuf[32];
-                snprintf(timeBuf, sizeof timeBuf, "%02d:%02d / %02d:%02d", curS / 60, curS % 60, totS / 60, totS % 60);
+                const float barA = 1.f;
 
-                const float barW = std::min(io.DisplaySize.x - 64.f * ui, 720.f * ui);
-                const float barH = 44.f * ui;
-                const float x0 = (io.DisplaySize.x - barW) * 0.5f;
-                const float y0 = io.DisplaySize.y - barH - 24.f * ui;
-                const float padX = 18.f * ui;
-                const float px = 19.f * ui;
+                const float barX0 = offsetX + 200.f * sx;
+                const float barX1 = offsetX + 440.f * sx;
+                const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
+                const float barH = 12.f * sy;
+                const float barY0 = barCy - barH * 0.5f;
+                const float barY1 = barCy + barH * 0.5f;
 
-                panel(fg, ImVec2(x0, y0), ImVec2(x0 + barW, y0 + barH), 8.f * ui,
-                      alpha(IM_COL32(6, 14, 30, 255), int(190 * barA)), alpha(IM_COL32(2, 6, 14, 255), int(215 * barA)),
-                      alpha(kGold, int(160 * barA)), 1.25f * ui);
-
-                const float timeW = textWidth(s_font, px, timeBuf, 1.5f * ui);
-                drawText(fg, s_font, px, ImVec2(x0 + padX, y0 + (barH - px) * 0.5f), alpha(kGold, int(255 * barA)), timeBuf, 1.5f * ui);
-
-                const float trackX0 = x0 + padX + timeW + 20.f * ui;
-                const float trackX1 = x0 + barW - padX;
-                if (trackX1 > trackX0 + 40.f * ui) {
-                    const float trackH = 7.f * ui;
-                    const float trackY0 = y0 + (barH - trackH) * 0.5f;
-                    const float frac = float(std::clamp(mv.curSec / mv.totalSec, 0.0, 1.0));
-                    const float fillX = trackX0 + (trackX1 - trackX0) * frac;
-                    fg->AddRectFilled(ImVec2(trackX0, trackY0), ImVec2(trackX1, trackY0 + trackH),
-                                      IM_COL32(255, 255, 255, int(45 * barA)), trackH * 0.5f);
-                    if (fillX > trackX0 + 1.f) {
-                        fg->AddRectFilled(ImVec2(trackX0, trackY0), ImVec2(fillX, trackY0 + trackH),
-                                          alpha(kGold, int(255 * barA)), trackH * 0.5f);
-                    }
-                    fg->AddCircleFilled(ImVec2(fillX, trackY0 + trackH * 0.5f), 5.5f * ui,
-                                        IM_COL32(255, 245, 210, int(255 * barA)));
+                fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(barX1, barY1), IM_COL32(115, 118, 124, int(215 * barA)));
+                const float frac = float(std::clamp(mv.curSec / mv.totalSec, 0.0, 1.0));
+                if (frac > 0.f) {
+                    const float fillX1 = barX0 + (barX1 - barX0) * frac;
+                    fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(fillX1, barY1), IM_COL32(255, 255, 255, int(255 * barA)));
                 }
             }
 
-            if (mv.paused) {
-                const float boxW = 340.f * ui;
-                const float boxH = 216.f * ui;
-                const float cx = io.DisplaySize.x * 0.5f;
-                const float cy = io.DisplaySize.y * 0.5f;
-                const float bx0 = cx - boxW * 0.5f;
-                const float by0 = cy - boxH * 0.5f;
-
-                panel(fg, ImVec2(bx0, by0), ImVec2(bx0 + boxW, by0 + boxH), 12.f * ui,
-                      IM_COL32(8, 18, 38, 225), IM_COL32(2, 6, 14, 240), alpha(kGold, 210), 1.5f * ui);
-
-                // Large "PAUSE" heading
-                const float titlePx = 38.f * ui;
-                const float titleW = textWidth(s_fontBig ? s_fontBig : s_font, titlePx, "PAUSE", 4.f * ui);
-                drawText(fg, s_fontBig ? s_fontBig : s_font, titlePx,
-                         ImVec2(cx - titleW * 0.5f, by0 + 22.f * ui), kGold, "PAUSE", 4.f * ui);
-
-                const float sepY = by0 + 76.f * ui;
-                fg->AddLine(ImVec2(bx0 + 26.f * ui, sepY), ImVec2(bx0 + boxW - 26.f * ui, sepY), alpha(kGold, 110), 1.f * ui);
-
-                // Selectable rows: Continue (0), Back (1)
-                const char* items[2] = {"Continue", "Back"};
-                const float rowH = 48.f * ui;
-                const float rowPx = 24.f * ui;
+            if (mv.paused && !s_open) {
+                // Invisible mouse hitboxes matching the native in-game font "CONTINUE" (y=230) and "BACK" (y=264) slots
+                const float rowYs[2] = {230.f - 18.f, 264.f - 18.f};
+                const ImVec2 mpos = io.MousePos;
+                const bool mClick = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
                 for (int i = 0; i < 2; i++) {
-                    const bool sel = (mv.pauseSel == i);
-                    const float ry0 = sepY + 18.f * ui + float(i) * (rowH + 10.f * ui);
-                    if (sel) {
-                        fg->AddRectFilled(ImVec2(bx0 + 22.f * ui, ry0), ImVec2(bx0 + boxW - 22.f * ui, ry0 + rowH),
-                                          alpha(kGold, 48), 7.f * ui);
-                        fg->AddRect(ImVec2(bx0 + 22.f * ui, ry0), ImVec2(bx0 + boxW - 22.f * ui, ry0 + rowH),
-                                    alpha(kGold, 210), 7.f * ui, 0, 1.5f * ui);
+                    const float rx0 = offsetX + 220.f * sx;
+                    const float rx1 = offsetX + 420.f * sx;
+                    const float ry0 = offsetY + (rowYs[i] - 14.f) * sy;
+                    const float ry1 = offsetY + (rowYs[i] + 14.f) * sy;
+                    if (mpos.x >= rx0 && mpos.x <= rx1 && mpos.y >= ry0 && mpos.y <= ry1) {
+                        moviePauseMouse(i, mClick);
                     }
-                    const float tw = textWidth(s_font, rowPx, items[i], 2.f * ui);
-                    const ImU32 col = sel ? kGold : IM_COL32(215, 225, 240, 220);
-                    drawText(fg, s_font, rowPx, ImVec2(cx - tw * 0.5f, ry0 + (rowH - rowPx) * 0.5f), col, items[i], 2.f * ui);
                 }
             }
         }
-        // Cutscene hold-B-to-skip indicator (bottom-right corner)
+        auto drawGameShadowText = [&](float px, ImVec2 pos, ImU32 col, const char* txt, float sp, float a) {
+            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
+            const float sh = std::max(2.f, px * 0.08f);
+            drawText(fg, fnt, px, ImVec2(pos.x + sh, pos.y + sh), IM_COL32(0, 0, 0, int(215 * a)), txt, sp);
+            drawText(fg, fnt, px, pos, col, txt, sp);
+        };
+
+        // Cutscene hold-B-to-skip indicator (true bottom-right corner, game menu font & Music Hall list size)
         const CutsceneSkipOverlay sk = cutsceneSkipOverlay();
         if (sk.visible) {
+            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
             const float a = sk.alpha;
-            const float px = 19.f * ui;
-            const char* label = "Hold to Skip";
-            const float labelW = textWidth(s_font, px, label, 1.5f * ui);
-            const float r = 13.f * ui;
-            const float padX = 14.f * ui;
-            const float gap = 12.f * ui;
-            const float boxW = padX + r * 2.f + gap + labelW + padX;
-            const float boxH = 42.f * ui;
-            const float x1 = io.DisplaySize.x - 24.f * ui;
-            const float y1 = io.DisplaySize.y - 22.f * ui;
-            const float x0 = x1 - boxW;
-            const float y0 = y1 - boxH;
+            const float px = 38.f * ui;
+            const float track = 1.0f * ui;
+            const char* label = "HOLD TO SKIP";
+            const float labelW = textWidth(fnt, px, label, track);
+            const float r = 18.f * ui;
+            const float gap = 14.f * ui;
+            const float totalW = r * 2.f + gap + labelW;
+            const float x0 = io.DisplaySize.x - 36.f * ui - totalW;
+            const float cy = io.DisplaySize.y - 44.f * ui;
 
-            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 8.f * ui,
-                  alpha(IM_COL32(6, 14, 30, 255), int(190 * a)), alpha(IM_COL32(2, 6, 14, 255), int(215 * a)),
-                  alpha(kGold, int((sk.holding ? 230 : 140) * a)), 1.25f * ui);
-
-            const ImVec2 center(x0 + padX + r, y0 + boxH * 0.5f);
-            fg->AddCircle(center, r, IM_COL32(255, 255, 255, int(65 * a)), 32, 2.5f * ui);
+            const ImVec2 center(x0 + r, cy);
+            fg->AddCircle(center, r, IM_COL32(0, 0, 0, int(140 * a)), 32, 4.5f * ui);
+            fg->AddCircle(center, r, IM_COL32(255, 255, 255, int(115 * a)), 32, 3.0f * ui);
             if (sk.progress > 0.005f) {
                 constexpr float kPi = 3.14159265f;
                 const float a0 = -kPi * 0.5f;
                 const float a1 = a0 + sk.progress * 2.f * kPi;
                 fg->PathClear();
                 fg->PathArcTo(center, r, a0, a1, 32);
-                fg->PathStroke(alpha(kGold, int(255 * a)), 0, 3.2f * ui);
+                fg->PathStroke(alpha(kGold, int(255 * a)), 0, 4.0f * ui);
             }
-            const ImU32 glyphCol = alpha(sk.holding ? kGold : IM_COL32(235, 240, 250, 255), int(255 * a));
+            const ImU32 glyphCol = alpha(sk.holding ? kGold : IM_COL32(255, 255, 255, 255), int(255 * a));
             const char glyph = buttonGlyphForGcB();
-            const float gR = 5.5f * ui;
-            const float gThick = 2.0f * ui;
+            const float gR = 7.5f * ui;
+            const float gThick = 2.6f * ui;
             if (glyph == 'x') {
                 fg->AddLine(ImVec2(center.x - gR, center.y - gR), ImVec2(center.x + gR, center.y + gR), glyphCol, gThick);
                 fg->AddLine(ImVec2(center.x + gR, center.y - gR), ImVec2(center.x - gR, center.y + gR), glyphCol, gThick);
@@ -3258,73 +3254,66 @@ void menuDraw() {
                                 ImVec2(center.x - gR * 1.1f, center.y + gR * 0.85f), glyphCol, gThick);
             } else {
                 const char txt[2] = {glyph, '\0'};
-                const float bPx = 16.f * ui;
-                const float bW = textWidth(s_font, bPx, txt, 0.f);
-                drawText(fg, s_font, bPx, ImVec2(center.x - bW * 0.5f, center.y - bPx * 0.52f), glyphCol, txt, 0.f);
+                const float bPx = 22.f * ui;
+                const float bW = textWidth(fnt, bPx, txt, 0.f);
+                drawGameShadowText(bPx, ImVec2(center.x - bW * 0.5f, center.y - bPx * 0.50f), glyphCol, txt, 0.f, a);
             }
 
-            const ImU32 textCol = sk.holding ? alpha(kGold, int(255 * a)) : IM_COL32(220, 230, 245, int(230 * a));
-            drawText(fg, s_font, px, ImVec2(x0 + padX + r * 2.f + gap, y0 + (boxH - px) * 0.5f), textCol, label, 1.5f * ui);
+            const ImU32 textCol = sk.holding ? IM_COL32(255, 200, 64, int(255 * a)) : IM_COL32(255, 255, 255, int(255 * a));
+            drawGameShadowText(px, ImVec2(x0 + r * 2.f + gap, cy - px * 0.50f), textCol, label, track, a);
         }
-        // Audio commentary indicator (bottom-center, persistent while active or paused)
+
+        // Audio commentary indicator (bottom-center, game menu font & Music Hall list size)
         const CommentaryOverlay co = commentaryOverlay();
         if (co.active) {
+            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
             const char* line1 = co.paused ? "AUDIO COMMENTARY PAUSED" : "AUDIO COMMENTARY";
-            const char* line2 = co.paused ? "Press L3 / C to Resume" : "Press L3 / C to Pause";
-            const float px1 = 17.f * ui;
-            const float px2 = 14.f * ui;
-            const float track1 = 2.f * ui;
+            const char* line2 = co.paused ? "PRESS L3 / C TO RESUME" : "PRESS L3 / C TO PAUSE";
+            const float px1 = 38.f * ui;
+            const float px2 = 28.f * ui;
+            const float track1 = 1.0f * ui;
             const float track2 = 0.8f * ui;
-            const float w1 = textWidth(s_font, px1, line1, track1);
-            const float w2 = textWidth(s_font, px2, line2, track2);
-            const float padX = 18.f * ui;
-            const float padY = 9.f * ui;
-            const float lineGap = 4.f * ui;
-            const float boxW = std::max(w1, w2) + padX * 2.f;
-            const float boxH = padY + px1 + lineGap + px2 + padY;
+            const float w1 = textWidth(fnt, px1, line1, track1);
+            const float w2 = textWidth(fnt, px2, line2, track2);
             const float cx = io.DisplaySize.x * 0.5f;
-            const float y1 = io.DisplaySize.y - 20.f * ui;
-            const float y0 = y1 - boxH;
-            const float x0 = cx - boxW * 0.5f;
-            const float x1 = cx + boxW * 0.5f;
-
-            const ImU32 bgTop = co.paused ? IM_COL32(22, 24, 28, 175) : IM_COL32(6, 14, 30, 170);
-            const ImU32 bgBot = co.paused ? IM_COL32(14, 15, 18, 195) : IM_COL32(2, 6, 14, 190);
-            const ImU32 border = co.paused ? IM_COL32(130, 136, 146, 140) : alpha(kGold, 145);
-            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 8.f * ui, bgTop, bgBot, border, 1.25f * ui);
-
-            const ImU32 col1 = co.paused ? IM_COL32(165, 170, 178, 210) : kGold;
-            const ImU32 col2 = co.paused ? IM_COL32(130, 136, 145, 190) : IM_COL32(205, 218, 238, 220);
-            drawText(fg, s_font, px1, ImVec2(cx - w1 * 0.5f, y0 + padY), col1, line1, track1);
-            drawText(fg, s_font, px2, ImVec2(cx - w2 * 0.5f, y0 + padY + px1 + lineGap), col2, line2, track2);
+            const float y0 = io.DisplaySize.y - 90.f * ui;
+            const ImU32 col1 = co.paused ? IM_COL32(185, 190, 198, 240) : IM_COL32(235, 215, 125, 255);
+            const ImU32 col2 = co.paused ? IM_COL32(155, 160, 168, 225) : IM_COL32(255, 255, 255, 245);
+            drawGameShadowText(px1, ImVec2(cx - w1 * 0.5f, y0), col1, line1, track1, 1.f);
+            drawGameShadowText(px2, ImVec2(cx - w2 * 0.5f, y0 + px1 + 4.f * ui), col2, line2, track2, 1.f);
         }
-        // Art Gallery title & index caption (bottom-center)
-        const ArtGalleryOverlay ag = artGalleryOverlay();
-        if (ag.active && ag.title && *ag.title) {
-            char sub[32];
-            snprintf(sub, sizeof sub, "%d / %d", ag.index + 1, ag.total);
-            const float px1 = 20.f * ui;
-            const float px2 = 14.f * ui;
-            const float track1 = 1.2f * ui;
-            const float track2 = 2.0f * ui;
-            const float w1 = textWidth(s_font, px1, ag.title, track1);
-            const float w2 = textWidth(s_font, px2, sub, track2);
-            const float padX = 22.f * ui;
-            const float padY = 10.f * ui;
-            const float lineGap = 4.f * ui;
-            const float boxW = std::max(w1, w2) + padX * 2.f;
-            const float boxH = padY + px1 + lineGap + px2 + padY;
-            const float cx = io.DisplaySize.x * 0.5f;
-            const float y1 = io.DisplaySize.y - 22.f * ui;
-            const float y0 = y1 - boxH;
-            const float x0 = cx - boxW * 0.5f;
-            const float x1 = cx + boxW * 0.5f;
+        // Music Hall playback progress bar (aligned in 4:3 game space directly between the native time labels)
+        const MusicHallOverlay mh = musicHallOverlay();
+        if (mh.active) {
+            const double total = mh.totalSec;
+            const double elapsed = (total > 0.0) ? std::clamp(mh.elapsedSec, 0.0, total) : std::max(0.0, mh.elapsedSec);
+            const float winW = io.DisplaySize.x;
+            const float winH = io.DisplaySize.y;
+            const u32 xfbLines = viXfbLines();
+            const float logicalH = (xfbLines >= 200u && xfbLines <= 528u) ? float(xfbLines) : 448.f;
+            const float aspect43W = winH * (4.f / 3.f);
+            const float boxW = std::min(winW, aspect43W);
+            const float boxH = (winW < aspect43W) ? (winW * (3.f / 4.f)) : winH;
+            const float offsetX = (winW - boxW) * 0.5f;
+            const float offsetY = (winH - boxH) * 0.5f;
+            const float sx = boxW / 640.f;
+            const float sy = boxH / logicalH;
 
-            panel(fg, ImVec2(x0, y0), ImVec2(x1, y1), 9.f * ui,
-                  IM_COL32(6, 14, 30, 200), IM_COL32(2, 6, 14, 220), alpha(kGold, 165), 1.25f * ui);
-            drawText(fg, s_font, px1, ImVec2(cx - w1 * 0.5f, y0 + padY), kGold, ag.title, track1);
-            drawText(fg, s_font, px2, ImVec2(cx - w2 * 0.5f, y0 + padY + px1 + lineGap),
-                     IM_COL32(205, 218, 238, 220), sub, track2);
+            // Bar sits centered between elapsed (x=165) and remaining (x=475),
+            // vertically centered on the y=418 native text row (minus 18-line EFB crop offset).
+            const float barX0 = offsetX + 200.f * sx;
+            const float barX1 = offsetX + 440.f * sx;
+            const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
+            const float barH = 12.f * sy;
+            const float barY0 = barCy - barH * 0.5f;
+            const float barY1 = barCy + barH * 0.5f;
+
+            fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(barX1, barY1), IM_COL32(115, 118, 124, 215));
+            const float frac = (total > 0.0) ? float(elapsed / total) : 0.f;
+            if (frac > 0.f) {
+                const float fillX1 = barX0 + (barX1 - barX0) * std::clamp(frac, 0.f, 1.f);
+                fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(fillX1, barY1), IM_COL32(255, 255, 255, 255));
+            }
         }
     }
     // save state messages: 2.5 s at the top, fading out

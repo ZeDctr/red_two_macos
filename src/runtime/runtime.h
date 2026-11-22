@@ -134,7 +134,10 @@ u32 viRetraceCount();      // retraces so far
 u32 viXfbLines();          // lines the VI scans out (304 for letterboxed cinematics, 450 in game)
 void setAudioSpeed(double speed, bool mute);  // hw.cpp: AI (audio) clock speed-up, output muted
 void setDvdBoost(double boost);               // hw.cpp: disc reads that much faster
+bool aiCatchUpPending();                      // hw.cpp: AI audio block(s) overdue after a host stall/VSync wait
+bool aiCatchUpStep();                         // hw.cpp: fire one overdue AI block if MusyX is ready
 bool cinematicSkip();                         // hle_game.cpp: a cinematic is being skipped
+void bootSkipInit();                          // hle_game.cpp: engage boot skip before the DOL runs
 void setGameAspect(double aspect);  // hle_game.cpp: the game's camera aspect (widescreen)
 // hw.cpp: a display copy to dest lands at this line of the VI's (front or back) frame buffer
 bool viLocateCopy(u32 dest, u32 strideBytes, u32& line, u32& lines);
@@ -189,6 +192,14 @@ struct ArtGalleryOverlay {
     const char* title = "";
 };
 ArtGalleryOverlay artGalleryOverlay();
+
+// hle_game.cpp: Music Hall playback progress bar (bottom-center)
+struct MusicHallOverlay {
+    bool active = false;
+    double elapsedSec = 0.0;
+    double totalSec = 0.0;
+};
+MusicHallOverlay musicHallOverlay();
 
 // hle_game.cpp: the game's own passcode unlocks (two flag words of its progress block, kept in
 // its save), for the menu's cheats page
@@ -259,5 +270,10 @@ private:
     bool m_held = false;
 };
 }  // namespace input
+
+// Mouse support for in-game front-end menus, pause menu, art gallery, and movie pause overlay
+void mouseMenuEvent(const void* sdlEvent);
+u16 mouseMenuPadButtons();
+void moviePauseMouse(int sel, bool click);
 
 }  // namespace rt

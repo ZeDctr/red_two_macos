@@ -78,3 +78,6 @@ hle     MainMenuSetup
 hle     MainMenuUpdate
 hle     OptionsMenuSetup
 hle     OptionsMenuUpdate
+hle     MusicHallSetup
+hle     MusicHallUpdate
+hle     MovieEndDraw

@@ -7,6 +7,7 @@
 #include "hw/gx_fifo.h"
 #include "../common/disc_image.h"
 
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -66,6 +67,8 @@ struct MovieOverlayState {
 } s_movieOverlay;
 
 static bool s_moviePaused = false;
+static std::atomic<int> s_movieMouseHover{-1};
+static std::atomic<bool> s_movieMouseClick{false};
 static std::atomic<u64> s_fullscreenMovieTb{0};
 
 void ensureMovieIndex(u32 discStart, u32 totalFrames, u32 firstOff, u32 firstSize) {
@@ -122,6 +125,189 @@ MovieOverlay movieOverlay() {
         out.lastActionTb = s_movieOverlay.lastActionTb;
     }
     return out;
+}
+
+// RAII guest stack frame for HLE hooks that call recompiled guest functions.
+// Never pass a local copy of Ctx to a guest function (a safepoint/interrupt inside poll() saves
+// and resumes the fiber's actual Ctx); instead allocate a 32-byte guest frame on c.r[1] so the
+// callee's `stw r0, 4(r1)` does not overwrite the caller's saved LR.
+struct GuestFrame {
+    Ctx& c;
+    u32 sp, lr;
+    explicit GuestFrame(Ctx& c) : c(c), sp(c.r[1]), lr(c.lr) {
+        wr32(sp - 0x20u, sp);
+        c.r[1] = sp - 0x20u;
+    }
+    ~GuestFrame() {
+        c.r[1] = sp;
+        c.lr = lr;
+    }
+};
+
+static u32 s_movieMenuObj = 0;
+static bool s_movieShowBar = false;
+
+// Native in-game font UI for the documentary/teaser movie player (pause menu + progress timestamps).
+// Uses slots 10..14 of menuObj so no ImGui text or launcher boxes are shown in-game.
+static void movieUpdateNativeUi(Ctx& c, u32 menuObj, bool paused, int pauseSel, bool showBar, double curSec, double totalSec) {
+    if (menuObj < 0x7FC00000u || menuObj >= 0x81800000u) return;
+    static u32 s_initMenuObj = 0;
+    static u8 s_initPage = 0xFFu;
+    static int s_lastEl = -1, s_lastRem = -1, s_lastSel = -1;
+    static bool s_lastPaused = false, s_lastBar = false;
+
+    const u8 page = rd8(menuObj + 0x3Eu);
+    const u32 slotBase = rd32(menuObj + 0x3B80u);
+    if (slotBase < 0x7FC00000u) return;
+    s_movieMenuObj = menuObj;
+    s_movieShowBar = showBar;
+
+    const u32 savedR3 = c.r[3];
+    const double savedF1 = c.f[1];
+    const double savedPs1 = c.ps1[1];
+    GuestFrame frame(c);
+    auto writeStr = [](u32 addr, const char* s) {
+        u32 k = 0;
+        do { wr8(addr + k, u8(s[k])); } while (s[k++] != '\0');
+    };
+    static constexpr u32 kMvPauseAddr = 0x8F000400u;
+    static constexpr u32 kMvContAddr  = 0x8F000410u;
+    static constexpr u32 kMvBackAddr  = 0x8F000428u;
+    static constexpr u32 kMvElAddr    = 0x8F000440u;
+    static constexpr u32 kMvRemAddr   = 0x8F000458u;
+
+    const bool needInit = (s_initMenuObj != menuObj || s_initPage != page || rd8(menuObj + 0x3BA4u) < 15u);
+    if (needInit) {
+        s_initMenuObj = menuObj;
+        s_initPage = page;
+        s_lastEl = s_lastRem = s_lastSel = -1;
+        s_lastPaused = !paused;
+        s_lastBar = !showBar;
+
+        writeStr(kMvPauseAddr, "PAUSED");
+        writeStr(kMvContAddr, "CONTINUE");
+        writeStr(kMvBackAddr, "BACK");
+        writeStr(kMvElAddr, "0:00");
+        writeStr(kMvRemAddr, "-0:00");
+
+        c.r[3] = 0x7FDE3428u;
+        f_7FD58DD8(c);
+        const u32 tmplStr = c.r[3];
+
+        extern void f_7FD3E9D4(Ctx& c);
+        auto initSlot = [&](u32 idx, double x, double y, double scale, u32 strAddr, u8 r, u8 g, u8 b) {
+            const u32 slot = slotBase + idx * 108u;
+            c.r[3] = tmplStr;
+            c.r[4] = slot;
+            c.r[5] = 0u;
+            c.f[1] = c.ps1[1] = rsingle(x);
+            c.f[2] = c.ps1[2] = rsingle(y);
+            f_7FD58EF0(c);
+            wr32(rd32(menuObj + 0x4508u) + idx * 4u, 0xFFFFFFFFu);
+            c.r[3] = slot;
+            c.r[4] = strAddr;
+            f_7FD3E418(c);
+            c.r[3] = slot;
+            c.r[4] = 2u;  // centered
+            f_7FD3E9C0(c);
+            c.r[3] = slot;
+            c.f[1] = c.ps1[1] = rsingle(scale);
+            f_7FD3EA1C(c);
+            c.r[3] = slot;
+            c.r[4] = 1u;  // enable native drop shadow (same as in-game pause menu)
+            c.f[1] = c.ps1[1] = rsingle(2.0);
+            c.f[2] = c.ps1[2] = rsingle(2.0);
+            c.f[3] = c.ps1[3] = rsingle(0.75);
+            f_7FD3E9D4(c);
+            c.r[3] = slot;
+            c.r[4] = 0u;
+            c.r[5] = r;
+            c.r[6] = g;
+            c.r[7] = b;
+            c.r[8] = 0xFFu;
+            f_7FD3EA00(c);
+            c.r[3] = slot;
+            c.r[4] = 0u;
+            f_7FD3E9B8(c);
+        };
+
+        initSlot(10u, 320.0, 178.0, 0.85, kMvPauseAddr, 0xFFu, 0xE0u, 0x60u);
+        initSlot(11u, 320.0, 230.0, 0.62, kMvContAddr,  0xFFu, 0xFFu, 0xFFu);
+        initSlot(12u, 320.0, 264.0, 0.62, kMvBackAddr,  0xFFu, 0xFFu, 0xFFu);
+        initSlot(13u, 165.0, 418.0, 0.50, kMvElAddr,    0xFFu, 0xFFu, 0xFFu);
+        initSlot(14u, 468.0, 418.0, 0.50, kMvRemAddr,   0xFFu, 0xFFu, 0xFFu);
+
+        if (rd8(menuObj + 0x3BA4u) < 15u) {
+            wr8(menuObj + 0x3BA4u, 15u);
+            wr8(menuObj + 0x3BA5u + page, 15u);
+        }
+    }
+
+    if (paused != s_lastPaused) {
+        s_lastPaused = paused;
+        s_lastSel = -1;
+        for (u32 idx = 10u; idx <= 12u; idx++) {
+            c.r[3] = slotBase + idx * 108u;
+            c.r[4] = paused ? 1u : 0u;
+            f_7FD3E9B8(c);
+        }
+    }
+    if (paused) {
+        // Smooth yellow <-> red pulsing glow on the selected item, matching the in-game pause menu.
+        const double t = 0.5 + 0.5 * std::sin((double(tbNow()) / double(kTbClock)) * 5.2);
+        const u8 selR = 0xFFu;
+        const u8 selG = u8(std::lround(42.0 + t * (232.0 - 42.0)));
+        const u8 selB = u8(std::lround(20.0 + t * (48.0 - 20.0)));
+        for (int i = 0; i < 2; i++) {
+            const u32 slot = slotBase + u32(11 + i) * 108u;
+            c.r[3] = slot;
+            c.r[4] = 0u;
+            if (i == pauseSel) {
+                c.r[5] = selR; c.r[6] = selG; c.r[7] = selB; c.r[8] = 0xFFu;
+            } else if (pauseSel != s_lastSel) {
+                c.r[5] = 0xFFu; c.r[6] = 0xFFu; c.r[7] = 0xFFu; c.r[8] = 0xFFu;
+            } else {
+                continue;
+            }
+            f_7FD3EA00(c);
+        }
+        s_lastSel = pauseSel;
+    }
+    if (showBar != s_lastBar) {
+        s_lastBar = showBar;
+        for (u32 idx = 13u; idx <= 14u; idx++) {
+            c.r[3] = slotBase + idx * 108u;
+            c.r[4] = showBar ? 1u : 0u;
+            f_7FD3E9B8(c);
+        }
+    }
+    if (showBar) {
+        const double el = (totalSec > 0.0) ? std::clamp(curSec, 0.0, totalSec) : std::max(0.0, curSec);
+        const double rem = (totalSec > 0.0) ? std::max(0.0, totalSec - el) : 0.0;
+        const int elSec = int(el + 0.5);
+        const int remSec = int(rem + 0.5);
+        if (elSec != s_lastEl) {
+            s_lastEl = elSec;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%d:%02d", elSec / 60, elSec % 60);
+            writeStr(kMvElAddr, buf);
+            c.r[3] = slotBase + 13u * 108u;
+            c.r[4] = kMvElAddr;
+            f_7FD3E418(c);
+        }
+        if (remSec != s_lastRem) {
+            s_lastRem = remSec;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "-%d:%02d", remSec / 60, remSec % 60);
+            writeStr(kMvRemAddr, buf);
+            c.r[3] = slotBase + 14u * 108u;
+            c.r[4] = kMvRemAddr;
+            f_7FD3E418(c);
+        }
+    }
+    c.r[3] = savedR3;
+    c.f[1] = savedF1;
+    c.ps1[1] = savedPs1;
 }
 
 void hle_MovieUpdate(Ctx& c) {
@@ -183,15 +369,20 @@ void hle_MovieUpdate(Ctx& c) {
 
                 if (!s_moviePaused && confirmPressed) {
                     s_moviePaused = true;
-                    s_pauseSel = 0;  // "Fortsetzen" selected by default
+                    s_pauseSel = 0;  // "Continue" selected by default
                     setAudioSpeed(1.0, true);
-                    std::lock_guard lk(s_movieOverlay.mu);
-                    s_movieOverlay.lastActiveTb = now;
-                    s_movieOverlay.paused = true;
-                    s_movieOverlay.pauseSel = 0;
-                    s_movieOverlay.curSec = double(curFrame) / fps;
-                    s_movieOverlay.totalSec = double(totalFrames) / fps;
-                    s_movieOverlay.lastActionTb = now;
+                    const double curSec = double(curFrame) / fps;
+                    const double totalSec = double(totalFrames) / fps;
+                    {
+                        std::lock_guard lk(s_movieOverlay.mu);
+                        s_movieOverlay.lastActiveTb = now;
+                        s_movieOverlay.paused = true;
+                        s_movieOverlay.pauseSel = 0;
+                        s_movieOverlay.curSec = curSec;
+                        s_movieOverlay.totalSec = totalSec;
+                        s_movieOverlay.lastActionTb = now;
+                    }
+                    if (menuObj) movieUpdateNativeUi(c, menuObj, true, 0, true, curSec, totalSec);
                     return;
                 }
 
@@ -205,6 +396,10 @@ void hle_MovieUpdate(Ctx& c) {
                         }
                         s_lastVert = vert;
 
+                        const int mHover = s_movieMouseHover.exchange(-1, std::memory_order_relaxed);
+                        if (mHover >= 0) s_pauseSel = mHover;
+                        if (s_movieMouseClick.exchange(false, std::memory_order_relaxed)) confirmPressed = true;
+
                         if (confirmPressed) {
                             if (s_pauseSel == 0) {
                                 // Fortsetzen
@@ -217,8 +412,13 @@ void hle_MovieUpdate(Ctx& c) {
                             } else {
                                 // End: hand the exit bit back to the game's native exit path
                                 s_moviePaused = false;
+                                s_movieShowBar = false;
                                 setAudioSpeed(1.0, false);
-                                if (menuObj) wr8(menuObj + 0x6699u, rawBtn | 0x20u);
+                                if (menuObj) {
+                                    movieUpdateNativeUi(c, menuObj, false, 0, false, 0.0, 0.0);
+                                    wr8(menuObj + 0x6699u, rawBtn | 0x20u);
+                                }
+                                s_movieMenuObj = 0;
                                 {
                                     std::lock_guard lk(s_movieOverlay.mu);
                                     s_movieOverlay.paused = false;
@@ -232,22 +432,33 @@ void hle_MovieUpdate(Ctx& c) {
                     }
                     if (s_moviePaused) {
                         setAudioSpeed(1.0, true);
-                        std::lock_guard lk(s_movieOverlay.mu);
-                        s_movieOverlay.lastActiveTb = now;
-                        s_movieOverlay.paused = true;
-                        s_movieOverlay.pauseSel = s_pauseSel;
-                        s_movieOverlay.curSec = double(curFrame) / fps;
-                        s_movieOverlay.totalSec = double(totalFrames) / fps;
+                        const double curSec = double(curFrame) / fps;
+                        const double totalSec = double(totalFrames) / fps;
+                        {
+                            std::lock_guard lk(s_movieOverlay.mu);
+                            s_movieOverlay.lastActiveTb = now;
+                            s_movieOverlay.paused = true;
+                            s_movieOverlay.pauseSel = s_pauseSel;
+                            s_movieOverlay.curSec = curSec;
+                            s_movieOverlay.totalSec = totalSec;
+                        }
+                        if (menuObj) movieUpdateNativeUi(c, menuObj, true, s_pauseSel, true, curSec, totalSec);
                         return;
                     }
                 }
 
+                u64 lastAct = 0;
                 {
                     std::lock_guard lk(s_movieOverlay.mu);
                     s_movieOverlay.lastActiveTb = now;
                     s_movieOverlay.paused = false;
                     s_movieOverlay.curSec = double(curFrame) / fps;
                     s_movieOverlay.totalSec = double(totalFrames) / fps;
+                    lastAct = s_movieOverlay.lastActionTb;
+                }
+                if (menuObj) {
+                    const bool showBar = lastAct != 0 && (double(now - lastAct) / double(kTbClock)) < 2.0;
+                    movieUpdateNativeUi(c, menuObj, false, s_pauseSel, showBar, double(curFrame) / fps, double(totalFrames) / fps);
                 }
 
                 // Left / Right (D-pad, stick or arrow keys / A / D): +/- 5 seconds with auto-repeat
@@ -310,12 +521,65 @@ void hle_MovieUpdate(Ctx& c) {
                 const double step = dt > 0.25 ? 1.0 / viRate() : std::clamp(dt, 0.00025, 1.0 / 29.97);
                 c.f[1] = c.ps1[1] = rsingle(step);
             }
-        } else if (s_moviePaused) {
-            s_moviePaused = false;
-            setAudioSpeed(1.0, false);
+        } else {
+            if (s_moviePaused) {
+                s_moviePaused = false;
+                setAudioSpeed(1.0, false);
+            }
+            s_movieShowBar = false;
+            s_movieMenuObj = 0;
         }
     }
     f_7FD8300C_orig(c);
+}
+
+// MovieEndDraw (0x7FD839A0): called right after the full-screen video quad in the documentary /
+// teaser player (0x7FD710A8, screen 0x13, return address 0x7FD712A4). Screen 0x13 jumps past
+// the front-end menu's text-layer pass (0x7FD6B46C -> f_7FD3F324), so invoke the exact same
+// f_7FD3F324(0, 0, dt) pass here on top of the video frame to render our native-font pause menu
+// and timestamps (slots 10..14) in the original game font.
+void hle_MovieEndDraw(Ctx& c) {
+    extern void f_7FD839A0_orig(Ctx& c);
+    extern void f_7FD3EA50(Ctx& c);
+    extern void f_7FD3E9B8(Ctx& c);
+    extern void f_7FD3F324(Ctx& c);
+    const u32 callerLr = c.lr;
+    f_7FD839A0_orig(c);
+    if (callerLr != 0x7FD712A4u) return;
+    if (!s_moviePaused && !s_movieShowBar) return;
+    const u32 menuObj = s_movieMenuObj;
+    if (menuObj < 0x7FC00000u || menuObj >= 0x81800000u) return;
+    if (rd32(0x80096200u) == 0 || rd32(0x80096220u) == 0) return;
+
+    GuestFrame frame(c);
+    const u8 page = rd8(menuObj + 0x3Eu) & 1u;
+    const u32 otherBase = menuObj + 0x70u + u32(page ^ 1u) * 7560u;
+    u8 savedOther[70];
+    for (int i = 0; i < 70; i++) {
+        const u32 slot = otherBase + u32(i) * 108u;
+        c.r[3] = slot;
+        f_7FD3EA50(c);
+        savedOther[i] = u8(c.r[3] & 0xFFu);
+        if (savedOther[i]) {
+            c.r[3] = slot;
+            c.r[4] = 0u;
+            f_7FD3E9B8(c);
+        }
+    }
+
+    c.f[1] = c.ps1[1] = s2d(rd32(0x7FDE8288u));
+    c.r[3] = 0u;
+    c.r[4] = 0u;
+    f_7FD3F324(c);
+
+    for (int i = 0; i < 70; i++) {
+        if (savedOther[i]) {
+            const u32 slot = otherBase + u32(i) * 108u;
+            c.r[3] = slot;
+            c.r[4] = savedOther[i];
+            f_7FD3E9B8(c);
+        }
+    }
 }
 
 // CardCheckSlot (0x7FC06CA8): on Slot A, enable the game's built-in autoCreate flag (r4 = 1)
@@ -326,26 +590,9 @@ void hle_CardCheckSlot(Ctx& c) {
     f_7FC06CA8_orig(c);
 }
 
-// RAII guest stack frame for HLE hooks that call recompiled guest functions.
-// Never pass a local copy of Ctx to a guest function (a safepoint/interrupt inside poll() saves
-// and resumes the fiber's actual Ctx); instead allocate a 32-byte guest frame on c.r[1] so the
-// callee's `stw r0, 4(r1)` does not overwrite the caller's saved LR.
-struct GuestFrame {
-    Ctx& c;
-    u32 sp, lr;
-    explicit GuestFrame(Ctx& c) : c(c), sp(c.r[1]), lr(c.lr) {
-        wr32(sp - 0x20u, sp);
-        c.r[1] = sp - 0x20u;
-    }
-    ~GuestFrame() {
-        c.r[1] = sp;
-        c.lr = lr;
-    }
-};
-
 // Front-end menu customization:
-// Promote Special Features (0x12), Rogue Leaders (0x07), and Passcodes (0x08) from Options (0x06)
-// into the Main Menu (0x04) in the order: Start, Special Features, Rogue Leaders, Passcodes, Options.
+// Promote Special Features (0x12) and Rogue Leaders (0x07) from Options (0x06) into the Main Menu
+// (0x04) in the order: Start, Special Features, Rogue Leaders, Options, Quit. Passcodes stays in Options.
 void hle_MenuSetScreen(Ctx& c) {
     const u32 menuObj = c.r[3];
     u32 target = c.r[4] & 0xFFu;
@@ -354,21 +601,23 @@ void hle_MenuSetScreen(Ctx& c) {
         // Every guest caller targeting Options (0x06) is a sub-screen returning to its old Options slot
         // (hle_MainMenuUpdate calls f_7FD6BCF0_orig directly when entering Options from the Main Menu).
         const u32 oldSel = initSel;
-        if (oldSel == 5u || oldSel == 0u || oldSel == 1u) {
-            // Special Features (5), Rogue Leaders (0), Passcodes (1) -> back to Main Menu (0x04)
+        if (oldSel == 5u || oldSel == 0u) {
+            // Special Features (5), Rogue Leaders (0) -> back to Main Menu (0x04)
             if (rd8(0x7FE1C4A0u) != 0 && rd8(c.r[13] + 0xFFFFB550u) != 0) {
                 GuestFrame gf(c);
                 c.r[3] = 0x7FE1C4A0u;
                 f_7FD57658(c);
             }
             target = 0x04u;
-            initSel = oldSel == 5u ? 1u : oldSel == 0u ? 2u : 3u;
+            initSel = oldSel == 5u ? 1u : 2u;
+        } else if (oldSel == 1u) {
+            initSel = 0u;  // Passcodes
         } else if (oldSel == 2u) {
-            initSel = 0u;  // Game Settings
+            initSel = 1u;  // Game Settings
         } else if (oldSel == 3u) {
-            initSel = 1u;  // Video Settings
+            initSel = 2u;  // Video Settings
         } else if (oldSel == 4u) {
-            initSel = 2u;  // Sound Settings
+            initSel = 3u;  // Sound Settings
         }
     }
     c.r[3] = menuObj;
@@ -389,16 +638,20 @@ void hle_MainMenuSetup(Ctx& c) {
     c.f[1] = c.ps1[1] = s2d(rd32(c.r[2] + 0xFFFFCD50u));
     f_7FD4CE78(c);
 
-    wr8(menuObj + 0x24u, 6);  // 6 items: Start, Special Features, Rogue Leaders, Passcodes, Options, Quit
+    wr8(menuObj + 0x24u, 5);  // 5 items: Start, Special Features, Rogue Leaders, Options, Quit
     wr32(menuObj + 0x2Cu, rd32(c.r[2] + 0xFFFFCE08u));  // attract demo idle timer
 
-    static constexpr u32 kMainStrings[5] = {
-        0x7FDE3410u,  // FrntEnd_StartScrn_start
+    static constexpr u32 kMainStrings[4] = {
+        0x7FDE3428u,  // template for START (same layout/baseline as Options/Quit)
         0x7FDE34E0u,  // FrntEnd_opts_main_specialFeatures
         0x7FDE3444u,  // FrntEnd_opts_main_rogueLeaders
-        0x7FDE3464u,  // FrntEnd_opts_main_passcodes
         0x7FDE3428u,  // FrntEnd_StartScrn_options
     };
+    static constexpr u32 kStartStringAddr = 0x8F000070u;
+    static constexpr char kStartLabel[] = "START";
+    for (u32 k = 0; k < sizeof(kStartLabel); k++) {
+        wr8(kStartStringAddr + k, u8(kStartLabel[k]));
+    }
     static constexpr u32 kQuitStringAddr = 0x8F000080u;
     static constexpr char kQuitLabel[] = "QUIT";
     for (u32 k = 0; k < sizeof(kQuitLabel); k++) {
@@ -410,8 +663,8 @@ void hle_MainMenuSetup(Ctx& c) {
     constexpr double stepY = 29.0;  // matches the vertical spacing of the Options submenu rows
     constexpr double scale = 0.70;  // matches the font size of the Options submenu items
 
-    for (int i = 0; i < 6; i++) {
-        c.r[3] = kMainStrings[i < 5 ? i : 4];
+    for (int i = 0; i < 5; i++) {
+        c.r[3] = kMainStrings[i < 4 ? i : 3];
         f_7FD58DD8(c);
         const u32 strPtr = c.r[3];
         const u8 idx = rd8(menuObj + 0x3BA4u);
@@ -422,13 +675,21 @@ void hle_MainMenuSetup(Ctx& c) {
         c.f[1] = c.ps1[1] = rsingle(x);
         c.f[2] = c.ps1[2] = rsingle(startY + double(i) * stepY);
         f_7FD58EF0(c);
-        if (i == 5) {
+        if (i == 0) {
+            c.r[3] = slot;
+            c.r[4] = kStartStringAddr;
+            f_7FD3E418(c);
+        } else if (i == 4) {
             c.r[3] = slot;
             c.r[4] = kQuitStringAddr;
             f_7FD3E418(c);
         }
         wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, 0xFFFFFFFFu);
-        wr16(rd32(menuObj + 0x6520u) + u32(idx) * 44u + 2u, 0xFFFFu);
+        const u32 emb = rd32(menuObj + 0x6520u) + u32(idx) * 44u;
+        wr16(emb + 2u, 0xFFFFu);
+        wr32(emb + 0x20u, 0u);  // clear any leftover X/Y offset from previous screens
+        wr32(emb + 0x24u, 0u);
+        wr32(emb + 0x28u, slot);  // bind emblem explicitly to this menu item's text slot
         wr8(menuObj + 0x3BA4u, idx + 1u);
     }
 
@@ -488,13 +749,13 @@ void hle_MainMenuUpdate(Ctx& c) {
     c.r[6] = rd8(menuObj + 0x3Eu);
     f_7FD77158(c);
 
-    if (sel == 5) {
+    if (sel == 4) {
         logf("menu", "quit to desktop (main menu)");
         quitToDesktop();
     }
 
-    static constexpr u32 kTargets[5] = {0x17u, 0x12u, 0x07u, 0x08u, 0x06u};
-    const u32 target = (sel >= 0 && sel < 5) ? kTargets[sel] : 0x17u;
+    static constexpr u32 kTargets[4] = {0x17u, 0x12u, 0x07u, 0x06u};
+    const u32 target = (sel >= 0 && sel < 4) ? kTargets[sel] : 0x17u;
     c.r[3] = menuObj;
     c.r[4] = target;
     c.r[5] = 0u;
@@ -514,16 +775,17 @@ void hle_OptionsMenuSetup(Ctx& c) {
     wr8(menuObj + 0x32u, 1);
     wr8(menuObj + 0x35u, 0);
 
-    static constexpr u32 kOptStrings[4] = {
+    static constexpr u32 kOptStrings[5] = {
+        0x7FDE3464u,  // FrntEnd_opts_main_passcodes
         0x7FDE3480u,  // FrntEnd_opts_main_gameSettings
         0x7FDE34A0u,  // FrntEnd_opts_main_videoSettings
         0x7FDE34C0u,  // FrntEnd_opts_main_soundSettings
         0x7FDE3504u,  // FrntEnd_opts_main_back
     };
-    static constexpr u32 kOptRows[4] = {6u, 8u, 10u, 12u};
+    static constexpr u32 kOptRows[5] = {6u, 8u, 10u, 12u, 14u};
     const double scale = s2d(rd32(c.r[2] + 0xFFFFCD50u));
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         c.r[3] = kOptStrings[i];
         f_7FD58DD8(c);
         const u32 strPtr = c.r[3];
@@ -573,8 +835,8 @@ void hle_OptionsMenuSetup(Ctx& c) {
         f_7FD3E9B8(c);
     }
 
-    wr8(menuObj + 0x24u, 4);  // 4 selectable items
-    if (rd8(menuObj + 0x23u) >= 4u) wr8(menuObj + 0x23u, 0u);
+    wr8(menuObj + 0x24u, 5);  // 5 selectable items
+    if (rd8(menuObj + 0x23u) >= 5u) wr8(menuObj + 0x23u, 0u);
     c.r[3] = menuObj;
     f_7FD6AF54(c);
 
@@ -591,11 +853,11 @@ void hle_OptionsMenuUpdate(Ctx& c) {
     const u32 menuObj = c.r[3];
     const u8 btn = rd8(menuObj + 0x6699u);
     const s8 sel = s8(rd8(menuObj + 0x23u));
-    const bool back = (btn & 0x20u) != 0 || ((btn & 0x10u) != 0 && sel == 3);
+    const bool back = (btn & 0x20u) != 0 || ((btn & 0x10u) != 0 && sel == 4);
     if (back) {
         GuestFrame gf(c);
         c.r[3] = menuObj + 0x6718u;
-        c.r[4] = 3u;
+        c.r[4] = 4u;
         c.r[5] = 1u;
         c.r[6] = rd8(menuObj + 0x3Eu);
         f_7FD77158(c);
@@ -610,7 +872,7 @@ void hle_OptionsMenuUpdate(Ctx& c) {
         }
         c.r[3] = menuObj;
         c.r[4] = 0x04u;
-        c.r[5] = 4u;  // highlight Options in Main Menu
+        c.r[5] = 3u;  // highlight Options in Main Menu
         f_7FD6BCF0(c);
         return;
     }
@@ -630,12 +892,695 @@ void hle_OptionsMenuUpdate(Ctx& c) {
     c.r[6] = rd8(menuObj + 0x3Eu);
     f_7FD77158(c);
 
-    static constexpr u32 kOptTargets[3] = {0x09u, 0x0Bu, 0x0Fu};
-    if (sel >= 0 && sel < 3) {
+    static constexpr u32 kOptTargets[4] = {0x08u, 0x09u, 0x0Bu, 0x0Fu};
+    if (sel >= 0 && sel < 4) {
         c.r[3] = menuObj;
         c.r[4] = kOptTargets[sel];
         c.r[5] = 0u;
         f_7FD6BCF0(c);
+    }
+}
+
+// --- Redesigned Music Hall (screen 0x14, mode 0) ---------------------------------------------
+// Replaces the original artwork-cycling Music Hall with a clean starfield background and a
+// paginated standard menu list of all 114 tracks (9 tracks + Previous Page + Next Page + Back
+// = 12 selectable rows per page). Because the front-end's built-in emblem array only holds 9
+// entries, we drive selection highlighting and emblem 0 directly without calling f_7FD6AF54.
+namespace {
+constexpr int kMusicHallTrackCount = 114;
+constexpr int kMusicHallPerPage = 11;
+constexpr int kMusicHallPageCount = (kMusicHallTrackCount + kMusicHallPerPage - 1) / kMusicHallPerPage;  // 11
+constexpr u32 kMusicHallTableAddr = 0x80060C38u;  // 16-byte entries: +0 h78, +2 h7a, +4 utf16Ptr, +10 b82
+
+int s_musicHallPage = 0;
+int s_musicHallItemCount = 0;
+int s_musicHallTitleSlot = -1;
+int s_musicHallElapsedSlot = -1;
+int s_musicHallRemainSlot = -1;
+int s_musicHallLastShownEl = -1;
+int s_musicHallLastShownRem = -1;
+int s_musicHallPlaying = -1;
+int s_musicHallPending = -1;
+bool s_musicHallAudioInit = false;
+bool s_musicHallAudioReady = false;
+u64 s_musicHallStartTb = 0;
+std::atomic<bool> s_musicHallOverlayActive{false};
+std::atomic<double> s_musicHallOverlayElapsed{0.0};
+std::atomic<double> s_musicHallOverlayTotal{0.0};
+
+int s_artTitleSlot = -1;
+int s_artIndexSlot = -1;
+int s_artLastPic = -1;
+}  // namespace
+
+// Forward-declared helper for Art Gallery titles (defined below)
+const char* artGalleryTitleForIndex(int idx, int& outTotal);
+
+namespace {
+
+double musicHallTrackDuration(int trackIdx) {
+    if (trackIdx < 0 || trackIdx >= kMusicHallTrackCount) return 0.0;
+    const u32 entry = kMusicHallTableAddr + u32(trackIdx) * 16u;
+    const double dur = s2d(rd32(entry + 12u));
+    // Track 5 ("Defending A Train") has 0.0 in the original table; actual length is 1:48 (108 s).
+    if (dur <= 0.0 && trackIdx == 5) return 108.0;
+    return dur > 0.0 ? dur : 0.0;
+}
+
+void formatTrackDuration(double sec, char* out, size_t maxLen) {
+    const int total = (sec > 0.0) ? int(sec + 0.5) : 0;
+    const int m = total / 60;
+    const int s = total % 60;
+    std::snprintf(out, maxLen, "%d:%02d", m, s);
+}
+
+void writeGuestAscii(u32 addr, const char* s) {
+    u32 k = 0;
+    do {
+        wr8(addr + k, u8(s[k]));
+    } while (s[k++] != '\0');
+}
+
+void readGuestUtf16Ascii(u32 utf16Addr, char* out, size_t maxLen) {
+    size_t n = 0;
+    while (n + 1 < maxLen) {
+        const u16 ch = rd16(utf16Addr + u32(n) * 2u);
+        if (ch == 0) break;
+        out[n++] = (ch < 128u) ? char(ch) : '?';
+    }
+    out[n] = '\0';
+}
+
+void musicHallApplyHighlight(Ctx& c, u32 menuObj) {
+    const int sel = int(s8(rd8(menuObj + 0x23u)));
+    const u32 slotBase = rd32(menuObj + 0x3B80u);
+    const double t = 0.5 + 0.5 * std::sin((double(tbNow()) / double(kTbClock)) * 5.2);
+    const u8 selG = u8(std::lround(42.0 + t * (232.0 - 42.0)));
+    const u8 selB = u8(std::lround(20.0 + t * (48.0 - 20.0)));
+    for (int i = 0; i < s_musicHallItemCount; i++) {
+        const u32 slot = slotBase + u32(i) * 108u;
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        if (i == sel) {
+            c.r[5] = 0xFFu;
+            c.r[6] = selG;
+            c.r[7] = selB;
+            c.r[8] = 0xFFu;
+        } else {
+            c.r[5] = 0xFFu;
+            c.r[6] = 0xFFu;
+            c.r[7] = 0xFFu;
+            c.r[8] = 0xFFu;
+        }
+        f_7FD3EA00(c);
+    }
+    // Point emblem 0 at the selected text slot (embBase + 0x24 is the built-in Y-up offset)
+    const u32 embBase = rd32(menuObj + 0x6520u);
+    if (sel >= 0 && sel < s_musicHallItemCount) {
+        wr8(embBase + 0u, 1u);
+        wr16(embBase + 2u, 0xFFFFu);
+        wr32(embBase + 0x24u, d2s(rsingle(-4.0)));
+        wr32(embBase + 0x28u, slotBase + u32(sel) * 108u);
+        c.r[3] = embBase;
+        f_7FD78084(c);
+    } else {
+        wr8(embBase + 0u, 0u);
+    }
+    for (u32 i = 1u; i < 9u; i++) {
+        wr8(embBase + i * 44u, 0u);
+    }
+}
+
+void musicHallPopulatePage(Ctx& c, u32 menuObj, int page, int initSel) {
+    if (page < 0) page = kMusicHallPageCount - 1;
+    if (page >= kMusicHallPageCount) page = 0;
+    s_musicHallPage = page;
+
+    const int startTrack = page * kMusicHallPerPage;
+    const int tracksOnPage = std::min(kMusicHallPerPage, kMusicHallTrackCount - startTrack);
+    const int itemCount = tracksOnPage + 3;  // tracks + PREVIOUS PAGE + NEXT PAGE + BACK
+    s_musicHallItemCount = itemCount;
+
+    // Hide all 70 text slots first
+    for (u32 i = 0; i < 70u; i++) {
+        c.r[3] = rd32(menuObj + 0x3B80u) + i * 108u;
+        c.r[4] = 0u;
+        f_7FD3E9B8(c);
+    }
+    // Reset slot counter; keep menuObj + 0x24 = 0 so f_7FD6A290 does not call f_7FD6AF54
+    // (which assumes <= 9 selectable items in the emblem array). We handle Up/Down & visuals here.
+    wr8(menuObj + 0x3BA4u, 0u);
+    wr8(menuObj + 0x25u, 0u);
+    wr8(menuObj + 0x24u, 0u);
+    if (initSel < 0) initSel = 0;
+    if (initSel >= itemCount) initSel = itemCount - 1;
+    wr8(menuObj + 0x23u, u8(initSel));
+
+    // Template string pointer for f_7FD58EF0 initialization
+    c.r[3] = 0x7FDE3428u;  // FrntEnd_StartScrn_options
+    f_7FD58DD8(c);
+    const u32 tmplStr = c.r[3];
+
+    // Helper to add a 2D text slot
+    auto addSlot = [&](double x, double y, double scale, u32 align) -> u32 {
+        const u8 idx = rd8(menuObj + 0x3BA4u);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(idx) * 108u;
+        c.r[3] = tmplStr;
+        c.r[4] = slot;
+        c.r[5] = 0u;
+        c.f[1] = c.ps1[1] = rsingle(x);
+        c.f[2] = c.ps1[2] = rsingle(y);
+        f_7FD58EF0(c);
+        wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, 0xFFFFFFFFu);
+        c.r[3] = slot;
+        c.r[4] = align;
+        f_7FD3E9C0(c);
+        c.r[3] = slot;
+        c.f[1] = c.ps1[1] = rsingle(scale);
+        f_7FD3EA1C(c);
+        c.r[3] = slot;
+        c.r[4] = 1u;
+        f_7FD3E9B8(c);
+        wr8(menuObj + 0x3BA4u, idx + 1u);
+        return slot;
+    };
+
+    constexpr double listX = 110.0;
+    constexpr double startY = 84.0;
+    constexpr double stepY = 21.0;
+    constexpr double itemScale = 0.50;
+
+    // 1) Track rows (0 .. tracksOnPage - 1) and measure each title's right edge
+    double trackRightX[kMusicHallPerPage] = {};
+    constexpr u32 kBoxScratch = 0x8F0000A0u;
+    for (int i = 0; i < tracksOnPage; i++) {
+        const int trackIdx = startTrack + i;
+        const u32 entry = kMusicHallTableAddr + u32(trackIdx) * 16u;
+        const u32 utf16Ptr = rd32(entry + 4u);
+        const u32 slot = addSlot(listX, startY + double(i) * stepY, itemScale, 0u);
+        c.r[3] = slot;
+        c.r[4] = utf16Ptr;
+        f_7FD3E454(c);
+        c.r[3] = slot;
+        c.r[4] = kBoxScratch + 0u;
+        c.r[5] = kBoxScratch + 4u;
+        c.r[6] = kBoxScratch + 8u;
+        c.r[7] = kBoxScratch + 12u;
+        f_7FD3EB1C(c);
+        trackRightX[i] = std::max(s2d(rd32(kBoxScratch + 0u)), s2d(rd32(kBoxScratch + 4u)));
+    }
+
+    // 2) Navigation rows: PREVIOUS PAGE, NEXT PAGE, BACK
+    static constexpr u32 kPrevStrAddr = 0x8F000100u;
+    static constexpr u32 kNextStrAddr = 0x8F000120u;
+    static constexpr u32 kBackStrAddr = 0x8F000140u;
+    writeGuestAscii(kPrevStrAddr, "PREVIOUS PAGE");
+    writeGuestAscii(kNextStrAddr, "NEXT PAGE");
+    writeGuestAscii(kBackStrAddr, "BACK");
+
+    const double navBaseY = startY + double(kMusicHallPerPage) * stepY + 10.0;
+    const u32 navAddrs[3] = {kPrevStrAddr, kNextStrAddr, kBackStrAddr};
+    for (int j = 0; j < 3; j++) {
+        const u32 slot = addSlot(listX, navBaseY + double(j) * stepY, itemScale, 0u);
+        c.r[3] = slot;
+        c.r[4] = navAddrs[j];
+        f_7FD3E418(c);
+    }
+
+    // 2b) Track durations "M:SS" in soft gold right after each track title (non-selectable)
+    static constexpr u32 kDurStrBase = 0x8F000240u;  // 12 * 16 = 192 bytes
+    for (int i = 0; i < tracksOnPage; i++) {
+        const int trackIdx = startTrack + i;
+        const double dur = musicHallTrackDuration(trackIdx);
+        char durBuf[16];
+        formatTrackDuration(dur, durBuf, sizeof(durBuf));
+        const u32 durAddr = kDurStrBase + u32(i) * 16u;
+        writeGuestAscii(durAddr, durBuf);
+        const u32 slot = addSlot(trackRightX[i] + 8.0, startY + double(i) * stepY, itemScale, 0u);
+        c.r[3] = slot;
+        c.r[4] = durAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xEBu;
+        c.r[6] = 0xD7u;
+        c.r[7] = 0x7Du;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+    }
+
+    // 3) Header: "MUSIC HALL" in gold + "X / 10" in white (no "PAGE" word)
+    static constexpr u32 kHeaderStrAddr = 0x8F000160u;
+    static constexpr u32 kPageNumStrAddr = 0x8F000190u;
+    writeGuestAscii(kHeaderStrAddr, "MUSIC HALL");
+    {
+        const u32 slot = addSlot(275.0, 48.0, 0.72, 2u);
+        c.r[3] = slot;
+        c.r[4] = kHeaderStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xEBu;
+        c.r[6] = 0xD7u;
+        c.r[7] = 0x7Du;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+    }
+    {
+        char pageBuf[32];
+        std::snprintf(pageBuf, sizeof(pageBuf), "%d /%d", page + 1, kMusicHallPageCount);
+        writeGuestAscii(kPageNumStrAddr, pageBuf);
+        const u32 slot = addSlot(395.0, 48.0, 0.72, 0u);
+        c.r[3] = slot;
+        c.r[4] = kPageNumStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xFFu;
+        c.r[6] = 0xFFu;
+        c.r[7] = 0xFFu;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+    }
+
+    // 4) Currently playing track title (centered, gold, without "NOW PLAYING:" prefix)
+    static constexpr u32 kNowPlayingStrAddr = 0x8F0001C0u;
+    char npBuf[96];
+    if (s_musicHallPlaying >= 0 && s_musicHallPlaying < kMusicHallTrackCount) {
+        readGuestUtf16Ascii(rd32(kMusicHallTableAddr + u32(s_musicHallPlaying) * 16u + 4u), npBuf, sizeof(npBuf));
+    } else {
+        std::snprintf(npBuf, sizeof(npBuf), "SELECT A TRACK TO PLAY");
+    }
+    writeGuestAscii(kNowPlayingStrAddr, npBuf);
+    {
+        s_musicHallTitleSlot = int(rd8(menuObj + 0x3BA4u));
+        const u32 slot = addSlot(320.0, 394.0, 0.52, 2u);
+        c.r[3] = slot;
+        c.r[4] = kNowPlayingStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xEBu;
+        c.r[6] = 0xD7u;
+        c.r[7] = 0x7Du;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+    }
+
+    // 5) Elapsed & remaining time labels in native menu font directly below the track title
+    static constexpr u32 kElapsedStrAddr = 0x8F000300u;
+    static constexpr u32 kRemainStrAddr = 0x8F000320u;
+    writeGuestAscii(kElapsedStrAddr, "0:00");
+    writeGuestAscii(kRemainStrAddr, "-0:00");
+    {
+        s_musicHallElapsedSlot = int(rd8(menuObj + 0x3BA4u));
+        const u32 slot = addSlot(165.0, 418.0, 0.50, 2u);  // centered left of bar
+        c.r[3] = slot;
+        c.r[4] = kElapsedStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xFFu;
+        c.r[6] = 0xFFu;
+        c.r[7] = 0xFFu;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+        c.r[3] = slot;
+        c.r[4] = (s_musicHallPlaying >= 0) ? 1u : 0u;
+        f_7FD3E9B8(c);
+    }
+    {
+        s_musicHallRemainSlot = int(rd8(menuObj + 0x3BA4u));
+        const u32 slot = addSlot(468.0, 418.0, 0.50, 2u);  // centered right of bar
+        c.r[3] = slot;
+        c.r[4] = kRemainStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xFFu;
+        c.r[6] = 0xFFu;
+        c.r[7] = 0xFFu;
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+        c.r[3] = slot;
+        c.r[4] = (s_musicHallPlaying >= 0) ? 1u : 0u;
+        f_7FD3E9B8(c);
+    }
+    s_musicHallLastShownEl = -1;
+    s_musicHallLastShownRem = -1;
+
+    // Sync per-page slot count so f_7FD6B144 renders all slots
+    wr8(menuObj + 0x3BA5u + rd8(menuObj + 0x3Eu), rd8(menuObj + 0x3BA4u));
+
+    // Apply selection highlight & emblem 0
+    musicHallApplyHighlight(c, menuObj);
+}
+
+void musicHallPlayTrack(Ctx& c, u32 menuObj, int trackIdx) {
+    if (trackIdx < 0 || trackIdx >= kMusicHallTrackCount) return;
+    const u32 entry = kMusicHallTableAddr + u32(trackIdx) * 16u;
+    c.r[3] = rd16(entry + 2u);   // songId (+0x7A from 0x80060BC0)
+    c.r[4] = rd16(entry + 0u);   // arg2 (+0x78)
+    c.r[5] = rd8(entry + 10u);   // arg3 (+0x82)
+    c.r[6] = 0x12Cu;
+    c.f[1] = c.ps1[1] = 0.0;
+    f_7FD4CE78(c);
+    s_musicHallPlaying = trackIdx;
+    s_musicHallStartTb = tbNow();
+    const double total = musicHallTrackDuration(trackIdx);
+    s_musicHallOverlayTotal.store(total, std::memory_order_relaxed);
+    s_musicHallOverlayElapsed.store(0.0, std::memory_order_relaxed);
+    s_musicHallOverlayActive.store(true, std::memory_order_relaxed);
+
+    // Update centered track title footer (without "NOW PLAYING:" prefix)
+    if (s_musicHallTitleSlot >= 0) {
+        static constexpr u32 kNowPlayingStrAddr = 0x8F0001C0u;
+        char npBuf[96];
+        readGuestUtf16Ascii(rd32(entry + 4u), npBuf, sizeof(npBuf));
+        writeGuestAscii(kNowPlayingStrAddr, npBuf);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_musicHallTitleSlot) * 108u;
+        c.r[3] = slot;
+        c.r[4] = kNowPlayingStrAddr;
+        f_7FD3E418(c);
+    }
+}
+}  // namespace
+
+MusicHallOverlay musicHallOverlay() {
+    MusicHallOverlay o;
+    o.active = s_musicHallOverlayActive.load(std::memory_order_relaxed);
+    o.elapsedSec = s_musicHallOverlayElapsed.load(std::memory_order_relaxed);
+    o.totalSec = s_musicHallOverlayTotal.load(std::memory_order_relaxed);
+    return o;
+}
+
+void artGallerySyncNativeCaption(Ctx& c, u32 menuObj, bool force) {
+    const int pic = int(rd8(menuObj + 0x6794u + 0x3E8u));
+    if (!force && pic == s_artLastPic) return;
+    s_artLastPic = pic;
+    int total = 27;
+    const char* title = artGalleryTitleForIndex(pic, total);
+    static constexpr u32 kArtTitleStrAddr = 0x8F000340u;
+    static constexpr u32 kArtIdxStrAddr = 0x8F0003C0u;
+    constexpr u32 kBoxScratch = 0x8F0000A0u;
+    writeGuestAscii(kArtTitleStrAddr, title ? title : "");
+    char idxBuf[24];
+    std::snprintf(idxBuf, sizeof(idxBuf), "%d /%d", pic + 1, total);
+    writeGuestAscii(kArtIdxStrAddr, idxBuf);
+    double titleRightX = 320.0;
+    if (s_artTitleSlot >= 0) {
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_artTitleSlot) * 108u;
+        c.r[3] = slot;
+        c.r[4] = kArtTitleStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.r[4] = kBoxScratch + 0u;
+        c.r[5] = kBoxScratch + 4u;
+        c.r[6] = kBoxScratch + 8u;
+        c.r[7] = kBoxScratch + 12u;
+        f_7FD3EB1C(c);
+        titleRightX = std::max(s2d(rd32(kBoxScratch + 0u)), s2d(rd32(kBoxScratch + 4u)));
+    }
+    if (s_artIndexSlot >= 0) {
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_artIndexSlot) * 108u;
+        c.r[3] = slot;
+        c.r[4] = kArtIdxStrAddr;
+        f_7FD3E418(c);
+        c.r[3] = slot;
+        c.f[1] = c.ps1[1] = rsingle(titleRightX + 12.0);
+        c.f[2] = c.ps1[2] = rsingle(454.0);
+        f_7FD3E9A4(c);
+    }
+}
+
+void hle_MusicHallSetup(Ctx& c) {
+    const u32 menuObj = c.r[3];
+    // Mode 1 is Art Gallery — run original setup, then add native-font caption & index slots.
+    if (rd32(menuObj + 0x04u) != 0u) {
+        s_musicHallOverlayActive.store(false, std::memory_order_relaxed);
+        f_7FD71670_orig(c);
+        GuestFrame gf(c);
+        c.r[3] = 0x7FDE3428u;
+        f_7FD58DD8(c);
+        const u32 tmplStr = c.r[3];
+        auto addArtSlot = [&](double x, double y, double scale, u32 align, u8 r, u8 g, u8 b) -> int {
+            const u8 idx = rd8(menuObj + 0x3BA4u);
+            const u32 slot = rd32(menuObj + 0x3B80u) + u32(idx) * 108u;
+            c.r[3] = tmplStr;
+            c.r[4] = slot;
+            c.r[5] = 0u;
+            c.f[1] = c.ps1[1] = rsingle(x);
+            c.f[2] = c.ps1[2] = rsingle(y);
+            f_7FD58EF0(c);
+            wr32(rd32(menuObj + 0x4508u) + u32(idx) * 4u, 0xFFFFFFFFu);
+            c.r[3] = slot;
+            c.r[4] = align;
+            f_7FD3E9C0(c);
+            c.r[3] = slot;
+            c.f[1] = c.ps1[1] = rsingle(scale);
+            f_7FD3EA1C(c);
+            c.r[3] = slot;
+            c.r[4] = 0u;
+            c.r[5] = r;
+            c.r[6] = g;
+            c.r[7] = b;
+            c.r[8] = 0xFFu;
+            f_7FD3EA00(c);
+            c.r[3] = slot;
+            c.r[4] = 1u;
+            f_7FD3E9B8(c);
+            wr8(menuObj + 0x3BA4u, idx + 1u);
+            return int(idx);
+        };
+        s_artTitleSlot = addArtSlot(298.0, 454.0, 0.56, 2u, 0xEBu, 0xD7u, 0x7Du);
+        s_artIndexSlot = addArtSlot(400.0, 454.0, 0.52, 0u, 0xFFu, 0xFFu, 0xFFu);
+        wr8(menuObj + 0x3BA5u + rd8(menuObj + 0x3Eu), rd8(menuObj + 0x3BA4u));
+        s_artLastPic = -1;
+        artGallerySyncNativeCaption(c, menuObj, true);
+        return;
+    }
+
+    GuestFrame gf(c);
+    // Ensure Art Gallery artwork renderer is OFF
+    wr8(menuObj + 0x6794u + 0x3E7u, 0u);
+    // Pure starfield background: disable 3D scene & background image fade
+    wr8(menuObj + 0x6579u, 0u);
+    wr32(menuObj + 0x657Cu, 0u);
+    wr8(menuObj + 0x6090u, 2u);
+    wr8(menuObj + 0x6091u, 3u);
+
+    s_musicHallPage = 0;
+    s_musicHallPlaying = -1;
+    s_musicHallPending = -1;
+    s_musicHallAudioInit = false;
+    s_musicHallAudioReady = false;
+    s_musicHallOverlayActive.store(false, std::memory_order_relaxed);
+    s_musicHallOverlayElapsed.store(0.0, std::memory_order_relaxed);
+    s_musicHallOverlayTotal.store(0.0, std::memory_order_relaxed);
+
+    musicHallPopulatePage(c, menuObj, 0, 0);
+
+    // Same camera/starfield transition call as original screen 0x14 (no 3D hangar models)
+    c.r[3] = menuObj;
+    c.r[4] = 0x1Eu;
+    c.r[5] = 0x0Au;
+    c.r[6] = 0x18u;
+    c.r[7] = 0u;
+    f_7FD6AD9C(c);
+
+    f_7FD30A38(c);
+}
+
+void hle_MusicHallUpdate(Ctx& c) {
+    const u32 menuObj = c.r[3];
+    // Mode 1 is Art Gallery — run original update, then sync native-font caption & index.
+    if (rd32(menuObj + 0x04u) != 0u) {
+        f_7FD71A14_orig(c);
+        if (rd8(menuObj + 0x6794u + 0x3E7u) == 1u) {
+            GuestFrame gf(c);
+            artGallerySyncNativeCaption(c, menuObj, false);
+        }
+        return;
+    }
+
+    GuestFrame gf(c);
+    f_7FD30AC0(c);
+    const bool ready = (c.r[3] & 0xFFu) != 0u;
+
+    // Initialize Music Hall audio bank once the screen transition finishes (same as original)
+    if (ready && !s_musicHallAudioInit && !s_musicHallAudioReady) {
+        f_7FD4AB34(c);
+        s_musicHallAudioInit = true;
+    }
+    if (s_musicHallAudioInit && !s_musicHallAudioReady) {
+        f_7FD59A84(c);
+        if (rd8(c.r[3]) != 0u) {
+            s_musicHallAudioReady = true;
+            if (s_musicHallPending >= 0) {
+                const int trk = s_musicHallPending;
+                s_musicHallPending = -1;
+                musicHallPlayTrack(c, menuObj, trk);
+            }
+        }
+    }
+
+    // Update playback progress bar timer & native time text slots
+    if (s_musicHallPlaying >= 0 && s_musicHallPlaying < kMusicHallTrackCount) {
+        const u32 entry = kMusicHallTableAddr + u32(s_musicHallPlaying) * 16u;
+        const double total = musicHallTrackDuration(s_musicHallPlaying);
+        const bool loops = rd8(entry + 8u) != 0u;
+        f_7FD4D0C0(c);
+        double elapsed = c.f[1];
+        if (elapsed <= 0.0 && s_musicHallStartTb != 0) {
+            elapsed = double(tbNow() - s_musicHallStartTb) / double(kTbClock);
+        }
+        if (total > 0.0) {
+            elapsed = loops ? std::fmod(elapsed, total) : std::clamp(elapsed, 0.0, total);
+        }
+        const double rem = (total > 0.0) ? std::max(0.0, total - elapsed) : 0.0;
+        s_musicHallOverlayElapsed.store(elapsed, std::memory_order_relaxed);
+        s_musicHallOverlayTotal.store(total > 0.0 ? total : 0.0, std::memory_order_relaxed);
+        s_musicHallOverlayActive.store(true, std::memory_order_relaxed);
+
+        const int elSec = int(elapsed + 0.5);
+        const int remSec = int(rem + 0.5);
+        if (elSec != s_musicHallLastShownEl && s_musicHallElapsedSlot >= 0) {
+            s_musicHallLastShownEl = elSec;
+            static constexpr u32 kElapsedStrAddr = 0x8F000300u;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%d:%02d", elSec / 60, elSec % 60);
+            writeGuestAscii(kElapsedStrAddr, buf);
+            const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_musicHallElapsedSlot) * 108u;
+            c.r[3] = slot;
+            c.r[4] = kElapsedStrAddr;
+            f_7FD3E418(c);
+            c.r[3] = slot;
+            c.r[4] = 1u;
+            f_7FD3E9B8(c);
+        }
+        if (remSec != s_musicHallLastShownRem && s_musicHallRemainSlot >= 0) {
+            s_musicHallLastShownRem = remSec;
+            static constexpr u32 kRemainStrAddr = 0x8F000320u;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "-%d:%02d", remSec / 60, remSec % 60);
+            writeGuestAscii(kRemainStrAddr, buf);
+            const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_musicHallRemainSlot) * 108u;
+            c.r[3] = slot;
+            c.r[4] = kRemainStrAddr;
+            f_7FD3E418(c);
+            c.r[3] = slot;
+            c.r[4] = 1u;
+            f_7FD3E9B8(c);
+        }
+    }
+
+    const u8 btn = rd8(menuObj + 0x6699u);
+    s8 sel = s8(rd8(menuObj + 0x23u));
+    if (sel >= 0 && sel < s_musicHallItemCount) {
+        const double t = 0.5 + 0.5 * std::sin((double(tbNow()) / double(kTbClock)) * 5.2);
+        const u32 slot = rd32(menuObj + 0x3B80u) + u32(sel) * 108u;
+        c.r[3] = slot;
+        c.r[4] = 0u;
+        c.r[5] = 0xFFu;
+        c.r[6] = u8(std::lround(42.0 + t * (232.0 - 42.0)));
+        c.r[7] = u8(std::lround(20.0 + t * (48.0 - 20.0)));
+        c.r[8] = 0xFFu;
+        f_7FD3EA00(c);
+    }
+    const int startTrack = s_musicHallPage * kMusicHallPerPage;
+    const int tracksOnPage = std::min(kMusicHallPerPage, kMusicHallTrackCount - startTrack);
+    const int prevIdx = tracksOnPage;
+    const int nextIdx = tracksOnPage + 1;
+    const int backIdx = tracksOnPage + 2;
+
+    // Handle Up / Down navigation directly (supports >9 selectable rows safely)
+    if ((btn & 0x01u) != 0 && s_musicHallItemCount > 0) {  // UP
+        if (sel > 0) {
+            sel--;
+            wr8(menuObj + 0x23u, u8(sel));
+            c.r[3] = 0x1E5u;
+            c.r[4] = 0x40u;
+            f_7FD5123C(c);
+            musicHallApplyHighlight(c, menuObj);
+        }
+        return;
+    }
+    if ((btn & 0x02u) != 0 && s_musicHallItemCount > 0) {  // DOWN
+        if (sel + 1 < s_musicHallItemCount) {
+            sel++;
+            wr8(menuObj + 0x23u, u8(sel));
+            c.r[3] = 0x1E5u;
+            c.r[4] = 0x40u;
+            f_7FD5123C(c);
+            musicHallApplyHighlight(c, menuObj);
+        }
+        return;
+    }
+
+    const bool back = ((btn & 0x20u) != 0 && ready) || ((btn & 0x10u) != 0 && sel == backIdx);
+    if (back) {
+        s_musicHallOverlayActive.store(false, std::memory_order_relaxed);
+        wr8(menuObj + 0x32u, 1u);
+        wr8(menuObj + 0x35u, 0u);
+        c.r[3] = menuObj;
+        c.r[4] = 0x12u;  // Special Features
+        c.r[5] = 0u;
+        f_7FD6BCF0(c);
+
+        c.r[3] = 0x1E2u;
+        c.r[4] = 0x40u;
+        f_7FD5123C(c);
+
+        if (s_musicHallAudioInit) {
+            f_7FD4ADD0(c);
+        }
+        // Restore menu theme
+        c.r[3] = 0x58u;
+        c.r[4] = 0x26u;
+        c.r[5] = 0x74u;
+        c.r[6] = 0u;
+        c.f[1] = c.ps1[1] = 0.0;
+        f_7FD4CE78(c);
+        return;
+    }
+
+    // Left / Right flips pages directly
+    if ((btn & 0x04u) != 0) {  // LEFT
+        c.r[3] = 0x1E5u;
+        c.r[4] = 0x40u;
+        f_7FD5123C(c);
+        musicHallPopulatePage(c, menuObj, s_musicHallPage - 1, 0);
+        return;
+    }
+    if ((btn & 0x08u) != 0) {  // RIGHT
+        c.r[3] = 0x1E5u;
+        c.r[4] = 0x40u;
+        f_7FD5123C(c);
+        musicHallPopulatePage(c, menuObj, s_musicHallPage + 1, 0);
+        return;
+    }
+
+    if ((btn & 0x10u) == 0) return;  // A / Left-click
+
+    c.r[3] = 0x1E1u;
+    c.r[4] = 0x40u;
+    f_7FD5123C(c);
+
+    if (sel == prevIdx) {
+        musicHallPopulatePage(c, menuObj, s_musicHallPage - 1, 0);
+        return;
+    }
+    if (sel == nextIdx) {
+        musicHallPopulatePage(c, menuObj, s_musicHallPage + 1, 0);
+        return;
+    }
+    if (sel >= 0 && sel < tracksOnPage) {
+        const int trackIdx = startTrack + int(sel);
+        if (s_musicHallAudioReady) {
+            musicHallPlayTrack(c, menuObj, trackIdx);
+        } else {
+            s_musicHallPending = trackIdx;
+        }
     }
 }
 
@@ -702,9 +1647,16 @@ constexpr int kSkipHz = 600;
 constexpr double kSkipHoldSecs = 2.0;
 static bool s_skip = false;
 static bool s_bootSkipping = false;
+static std::atomic<bool> s_skipDraws{false};
 static bool s_nativeSceneSkip = false;
 static double s_nativeSkipFallbackSecs = 0.0;
-bool cinematicSkip() { return s_skip || s_bootSkipping; }
+bool cinematicSkip() { return s_skipDraws.load(std::memory_order_relaxed); }
+void bootSkipInit() {
+    if (!settings::get().skipLogos) return;
+    s_bootSkipping = true;
+    viSetRate(kSkipHz);
+    setDvdBoost(50.0);
+}
 
 namespace {
 struct CutsceneSkipState {
@@ -772,7 +1724,10 @@ void hle_SceneSkipAllowed(Ctx& c) {
 // the top-level loop 0x7FC00030) shows the legal notice, checks the memory card, then plays the
 // 3D LucasArts intro and the logos: 16x and silent, still drawn (the card dialogs may need an
 // answer), its logic (card checks, loads) as it is.
-static bool bootScreen() { return rd32(0x7FDE8254) == 5 && rd32(0x7FDE822C) == 22; }
+static bool bootScreen() {
+    const u32 mode = rd32(0x7FDE8254);
+    return (mode == 5 && rd32(0x7FDE822C) == 22) || (mode == 6 && rd8(0x800962EF) == 0x15);
+}
 
 static void keepHealth();
 static void keepAmmo();
@@ -781,6 +1736,7 @@ static void resultsTest(Ctx& c);
 static void unlocksFrame();
 static void commentaryUpdate(Ctx& c);
 static void artGalleryUpdate(Ctx& c);
+static void mouseMenuUpdate(Ctx& c);
 
 void hle_GameFrameDelta(Ctx& c) {
     frameDelta(c);
@@ -798,9 +1754,26 @@ void hle_GameFrameDelta(Ctx& c) {
     const bool anyPressed = anyBtn && !anyWas;
     anyWas = anyBtn;
 
+    // Inside f_7FC03074 (boot splash / loading loop, caller 0x7FC03BDC via f_7FC03BC4):
+    // - On mode 5 / scene 22 (the black loading screen right before the 3D intro sequence), the game
+    //   sets artificial multi-second countdown timers at 0x7FDE85C8 and 0x7FDE8660 even after SSD
+    //   disc loading has already finished. With Fast loading (or Skip intro logos), expire them
+    //   immediately (keeping 0x7FDE8660 at 0.001f so f_7FD4CFDC(0x7D0) still triggers on this frame).
+    // - On mode 0 (the initial legal/Dolby/Nintendo splash screen), expire 0x7FDE85C8 immediately
+    //   when Skip intro logos is enabled.
+    const bool inBootSplash = (c.lr == 0x7FC03BDCu && rd32(0x7FDE8254u) == 0u);
+    if (c.lr == 0x7FC03BDCu) {
+        const u32 m = rd32(0x7FDE8254u);
+        const u32 sc = rd32(0x7FDE8258u);
+        if ((m == 5u && sc == 22u && (s.fastDisc || s.skipLogos)) || (m == 0u && s.skipLogos)) {
+            if (s2d(rd32(0x7FDE85C8u)) > 0.0) wr32(0x7FDE85C8u, 0u);
+            if (s2d(rd32(0x7FDE8660u)) > 0.001) wr32(0x7FDE8660u, d2s(rsingle(0.001)));
+        }
+    }
+
     static double skipHold = 0.0;
     static bool s_skipBootOnce = false;
-    const bool inBoot = bootScreen();
+    const bool inBoot = bootScreen() || inBootSplash;
     const bool inFrontEndMenu = rd32(0x7FDE8254) == 6;  // front-end menus (incl. letterboxed Sound Settings Audio Test)
     const bool inStandaloneScene = standaloneScene();
     if (!inBoot) s_skipBootOnce = false;
@@ -848,7 +1821,8 @@ void hle_GameFrameDelta(Ctx& c) {
             }
         }
     }
-    const bool wantBootSkip = (s.skipLogos || s_skipBootOnce) && inBoot;
+    const bool inPreIntroBlackLoad = (c.lr == 0x7FC03BDCu && rd32(0x7FDE8254u) == 5u && rd32(0x7FDE8258u) == 22u && s.fastDisc);
+    const bool wantBootSkip = ((s.skipLogos || s_skipBootOnce) && inBoot) || inPreIntroBlackLoad;
     if (wantBootSkip != s_bootSkipping) {
         s_bootSkipping = wantBootSkip;
         if (s_bootSkipping) {
@@ -870,6 +1844,7 @@ void hle_GameFrameDelta(Ctx& c) {
         viSetRate(s.fps);
         setDvdBoost(1.0);
     }
+    s_skipDraws.store(s_skip || (s_bootSkipping && !inFrontEndMenu), std::memory_order_relaxed);
     if (s_skip || s_bootSkipping) {
         c.f[1] = c.ps1[1] = rsingle(kSkipStep);
         setAudioSpeed(std::min(kSkipStep / real, 64.0), true);
@@ -885,6 +1860,7 @@ void hle_GameFrameDelta(Ctx& c) {
     unlocksFrame();
     commentaryUpdate(c);
     artGalleryUpdate(c);
+    mouseMenuUpdate(c);
     // widescreen: the flight HUD goes to the screen edges (not the menus: their layout is 4:3).
     // Nor the pause screen, drawn while the craft exists: its objectives' check marks and dots
     // sit left of the centered text and were moved out to the left (by the 4:3 margin, 240 px
@@ -1775,6 +2751,12 @@ const char* const kArtGalleryTitles[kArtGalleryCount] = {
 std::atomic<int> s_artGalleryIdx{-1};  // -1 = inactive, 0..26 = active image index
 }  // namespace
 
+const char* artGalleryTitleForIndex(int idx, int& outTotal) {
+    outTotal = kArtGalleryCount;
+    if (idx < 0 || idx >= kArtGalleryCount) return "";
+    return kArtGalleryTitles[idx];
+}
+
 ArtGalleryOverlay artGalleryOverlay() {
     const int idx = s_artGalleryIdx.load(std::memory_order_relaxed);
     if (idx < 0 || idx >= kArtGalleryCount) return {};
@@ -2167,5 +3149,246 @@ void hleAfterLoad() {
         const u32 i = s_oldAspectCount.fetch_add(1, std::memory_order_relaxed);
         s_oldAspects[i % 8].store(f, std::memory_order_relaxed);
     }
+}
+
+namespace {
+struct MouseMenuState {
+    std::mutex mu;
+    float mx = 0.f, my = 0.f;
+    float winW = 0.f, winH = 0.f;
+    bool moved = false;
+    bool leftClicked = false;
+    bool rightClicked = false;
+    int wheelDelta = 0;  // +1 = up, -1 = down
+};
+MouseMenuState s_mouseMenu;
+std::atomic<u16> s_mouseInjectMask{0};
+}  // namespace
+
+void moviePauseMouse(int sel, bool click) {
+    if (sel >= 0 && sel <= 1) s_movieMouseHover.store(sel, std::memory_order_relaxed);
+    if (click) s_movieMouseClick.store(true, std::memory_order_relaxed);
+}
+
+void mouseMenuEvent(const void* sdlEvent) {
+    if (!sdlEvent || gfx::menuOpen()) return;
+    const SDL_Event& e = *static_cast<const SDL_Event*>(sdlEvent);
+    std::lock_guard lk(s_mouseMenu.mu);
+    auto updateWinSize = [&](SDL_WindowID id) {
+        if (SDL_Window* w = SDL_GetWindowFromID(id)) {
+            int ww = 0, wh = 0;
+            SDL_GetWindowSize(w, &ww, &wh);
+            if (ww > 0 && wh > 0) {
+                s_mouseMenu.winW = float(ww);
+                s_mouseMenu.winH = float(wh);
+            }
+        }
+    };
+    if (e.type == SDL_EVENT_MOUSE_MOTION) {
+        updateWinSize(e.motion.windowID);
+        s_mouseMenu.mx = e.motion.x;
+        s_mouseMenu.my = e.motion.y;
+        s_mouseMenu.moved = true;
+    } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        updateWinSize(e.button.windowID);
+        s_mouseMenu.mx = e.button.x;
+        s_mouseMenu.my = e.button.y;
+        if (e.button.button == SDL_BUTTON_LEFT) s_mouseMenu.leftClicked = true;
+        else if (e.button.button == SDL_BUTTON_RIGHT) s_mouseMenu.rightClicked = true;
+    } else if (e.type == SDL_EVENT_MOUSE_WHEEL) {
+        updateWinSize(e.wheel.windowID);
+        if (e.wheel.y > 0.f) s_mouseMenu.wheelDelta = 1;
+        else if (e.wheel.y < 0.f) s_mouseMenu.wheelDelta = -1;
+    }
+}
+
+u16 mouseMenuPadButtons() {
+    return s_mouseInjectMask.load(std::memory_order_relaxed);
+}
+
+static void mouseMenuUpdate(Ctx& c) {
+    static u16 heldMask = 0;
+    static int heldFrames = 0;
+
+    if (heldFrames > 0) {
+        heldFrames--;
+        if (heldFrames == 0) heldMask = 0;
+    }
+
+    const bool inFrontEnd = rd32(0x7FDE8254) == 6;
+    const bool inPause = rd32(0x7FDE8668) == 2;
+    const bool active = !gfx::menuOpen() && !s_moviePaused && (inFrontEnd || inPause);
+
+    float mx = 0.f, my = 0.f, winW = 0.f, winH = 0.f;
+    bool moved = false, leftClick = false, rightClick = false;
+    int wheel = 0;
+    {
+        std::lock_guard lk(s_mouseMenu.mu);
+        mx = s_mouseMenu.mx;
+        my = s_mouseMenu.my;
+        winW = s_mouseMenu.winW;
+        winH = s_mouseMenu.winH;
+        moved = s_mouseMenu.moved;
+        leftClick = s_mouseMenu.leftClicked;
+        rightClick = s_mouseMenu.rightClicked;
+        wheel = s_mouseMenu.wheelDelta;
+        s_mouseMenu.moved = false;
+        s_mouseMenu.leftClicked = false;
+        s_mouseMenu.rightClicked = false;
+        s_mouseMenu.wheelDelta = 0;
+    }
+
+    if (!active) {
+        heldMask = 0;
+        heldFrames = 0;
+        s_mouseInjectMask.store(0, std::memory_order_relaxed);
+        return;
+    }
+
+    auto pulse = [&](u16 btn) {
+        heldMask = btn;
+        heldFrames = 3;
+    };
+
+    if (inFrontEnd) {
+        const u32 menuObj = rd32(c.r[13] + 0xFFFFB548u);
+        const u8 screen = rd8(c.r[13] + 0xFFFFB54Fu);
+        const bool inArtGallery = (screen == 0x14u && menuObj >= 0x7FC00000u && rd8(menuObj + 0x6794u + 0x3E7u) == 1u);
+
+        if (inArtGallery) {
+            if (leftClick || wheel < 0) pulse(0x0002u);       // PAD_BUTTON_RIGHT (next image)
+            else if (wheel > 0) pulse(0x0001u);               // PAD_BUTTON_LEFT (prev image)
+            else if (rightClick) pulse(0x0200u);              // PAD_BUTTON_B (back)
+        } else if (screen != 0x08u) {
+            // Standard front-end menus (Main Menu, Options, Game/Video/Sound Settings, Special Features, Rogue Leaders, Music Hall, etc.)
+            const bool inMusicHall = (screen == 0x14u && menuObj >= 0x7FC00000u && rd32(menuObj + 0x04u) == 0u);
+            if (menuObj >= 0x7FC00000u && rd8(menuObj) == 0x26u &&
+                winW > 0.f && winH > 0.f && (moved || leftClick)) {
+                const int minSel = inMusicHall ? 0 : int(s8(rd8(menuObj + 0x25u)));
+                const int itemCount = inMusicHall ? s_musicHallItemCount : int(s8(rd8(menuObj + 0x24u)));
+                const bool horiz = !inMusicHall && rd8(menuObj + 0x02u) == 1u;
+                const u32 slotBase = rd32(menuObj + 0x3B80u);
+                if (minSel >= 0 && itemCount > minSel && itemCount <= 16 && slotBase >= 0x7FC00000u) {
+                    const u32 xfbLines = viXfbLines();
+                    const float logicalH = (xfbLines >= 200u && xfbLines <= 528u) ? float(xfbLines) : 448.f;
+                    const float aspect43W = winH * (4.f / 3.f);
+                    const float boxW = std::min(winW, aspect43W);
+                    const float boxH = (winW < aspect43W) ? (winW * (3.f / 4.f)) : winH;
+                    const float offsetX = (winW - boxW) * 0.5f;
+                    const float offsetY = (winH - boxH) * 0.5f;
+                    const float gx = (mx - offsetX) * (640.f / boxW);
+                    // Account for the front-end EFB display-copy vertical offset (18 logical lines)
+                    const float gy = (my - offsetY) * (logicalH / boxH) + 18.f;
+
+                    int best = -1;
+                    float bestDist = 1e9f;
+                    constexpr u32 kScratch = 0x8F0000A0u;
+                    for (int i = minSel; i < itemCount; i++) {
+                        const u32 slot = slotBase + u32(i) * 108u;
+                        // Note: do not filter on rd8(slot + 1u) == 0, because toggle items like
+                        // AUDIO COMMENTARY: ON and ACE MODE: ON hide their primary OFF slot and
+                        // display a secondary ON slot at the exact same coordinates.
+                        if (rd32(slot + 4u) == 0 || s32(rd32(slot + 0x60u)) <= 0) continue;
+
+                        {
+                            const Ctx saved = c;
+                            GuestFrame gf(c);
+                            c.r[3] = slot;
+                            c.r[4] = kScratch + 0u;
+                            c.r[5] = kScratch + 4u;
+                            c.r[6] = kScratch + 8u;
+                            c.r[7] = kScratch + 12u;
+                            f_7FD3EB1C(c);
+                            c = saved;
+                        }
+                        const float minX = float(s2d(rd32(kScratch + 0u)));
+                        const float maxX = float(s2d(rd32(kScratch + 4u)));
+                        const float minY = float(s2d(rd32(kScratch + 8u)));
+                        const float maxY = float(s2d(rd32(kScratch + 12u)));
+
+                        float sxMin = std::min(minX, maxX), sxMax = std::max(minX, maxX);
+                        float syMin = std::min(minY, maxY), syMax = std::max(minY, maxY);
+                        const u32 mat = rd32(slot + 0x68u);
+                        if (mat >= 0x7FC00000u) {
+                            const float m00 = float(s2d(rd32(mat + 0x00u))), m01 = float(s2d(rd32(mat + 0x04u)));
+                            const float m02 = float(s2d(rd32(mat + 0x08u))), m03 = float(s2d(rd32(mat + 0x0Cu)));
+                            const float m10 = float(s2d(rd32(mat + 0x10u))), m11 = float(s2d(rd32(mat + 0x14u)));
+                            const float m12 = float(s2d(rd32(mat + 0x18u))), m13 = float(s2d(rd32(mat + 0x1Cu)));
+                            constexpr float lz = -15.625f;  // -500 / 32.0f in f_7FD3F54C
+                            const float x0 = m00 * minX + m01 * minY + m02 * lz + m03;
+                            const float x1 = m00 * maxX + m01 * maxY + m02 * lz + m03;
+                            const float y0 = m10 * minX + m11 * minY + m12 * lz + m13;
+                            const float y1 = m10 * maxX + m11 * maxY + m12 * lz + m13;
+                            sxMin = std::min(x0, x1);
+                            sxMax = std::max(x0, x1);
+                            syMin = std::min(y0, y1);
+                            syMax = std::max(y0, y1);
+                        }
+
+                        if (!horiz) {
+                            if (gx < std::min(sxMin - 24.f, 110.f) || gx > std::max(sxMax + 24.f, 530.f)) continue;
+                            const float syCenter = 0.5f * (syMin + syMax);
+                            const float syHalf = std::max(0.5f * (syMax - syMin) + 3.5f, 10.f);
+                            const float dist = std::fabs(gy - syCenter);
+                            if (dist <= syHalf && dist < bestDist) {
+                                bestDist = dist;
+                                best = i;
+                            }
+                        } else {
+                            if (gy < syMin - 8.f || gy > syMax + 8.f) continue;
+                            const float sxCenter = 0.5f * (sxMin + sxMax);
+                            const float sxHalf = std::max(0.5f * (sxMax - sxMin) + 12.f, 24.f);
+                            const float dist = std::fabs(gx - sxCenter);
+                            if (dist <= sxHalf && dist < bestDist) {
+                                bestDist = dist;
+                                best = i;
+                            }
+                        }
+                    }
+                    if (best >= 0 && u8(best) != rd8(menuObj + 0x23u)) {
+                        const Ctx saved = c;
+                        wr8(menuObj + 0x23u, u8(best));
+                        {
+                            GuestFrame gf(c);
+                            c.r[3] = 0x1E5u;
+                            c.r[4] = 0x40u;
+                            f_7FD5123C(c);
+                            if (inMusicHall) {
+                                musicHallApplyHighlight(c, menuObj);
+                            } else {
+                                c.r[3] = menuObj;
+                                f_7FD6AF54(c);
+                            }
+                        }
+                        c = saved;
+                    }
+                }
+            }
+            // Show the Rebel emblem ONLY next to the currently selected item in front-end menus
+            if (menuObj >= 0x7FC00000u && menuObj < 0x81800000u && !inMusicHall && !inArtGallery && screen != 0x13u) {
+                const u32 embBase = rd32(menuObj + 0x6520u);
+                const int sel = int(s8(rd8(menuObj + 0x23u)));
+                const int count = int(rd8(menuObj + 0x24u));
+                if (embBase >= 0x7FC00000u && embBase < 0x81800000u && count > 0 && count <= 9) {
+                    for (int i = 0; i < 9; i++) {
+                        const u32 emb = embBase + u32(i) * 44u;
+                        wr8(emb, (i == sel && i < count) ? 1u : 0u);
+                        if (i == 0) wr32(emb + 0x24u, 0u);
+                    }
+                }
+            }
+            if (leftClick) pulse(0x0100u);       // PAD_BUTTON_A
+            else if (rightClick) pulse(0x0200u); // PAD_BUTTON_B
+            else if (wheel > 0) pulse(0x0008u);  // PAD_BUTTON_UP
+            else if (wheel < 0) pulse(0x0004u);  // PAD_BUTTON_DOWN
+        }
+    } else if (inPause) {
+        if (leftClick) pulse(0x0100u);           // PAD_BUTTON_A
+        else if (rightClick) pulse(0x0200u);     // PAD_BUTTON_B
+        else if (wheel > 0) pulse(0x0008u);      // PAD_BUTTON_UP
+        else if (wheel < 0) pulse(0x0004u);      // PAD_BUTTON_DOWN
+    }
+
+    s_mouseInjectMask.store(heldMask, std::memory_order_relaxed);
 }
 }  // namespace rt

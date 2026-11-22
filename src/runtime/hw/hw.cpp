@@ -285,16 +285,17 @@ void diStart() {
     const u32 cmd0 = di[DICMD0];
     const u32 cmd = cmd0 >> 24;
     s_diOp = {true, cmd0, di[DICMD1], di[DILEN], di[DIMAR]};
-    u64 latencyTb = kTbClock / 2000;  // 0.5 ms command overhead
+    const bool fastDisc = settings::get().fastDisc;
+    u64 latencyTb = fastDisc ? (kTbClock / 50000) : (kTbClock / 2000);  // 0.02 ms (fast) or 0.5 ms command overhead
     switch (cmd) {
     case 0xA8:
         if ((cmd0 & 0xC0) == 0x40) s_diOp.len = 0x20;  // read disc ID
-        {   // transfer time: R2_DVD_SPEED=<MB/s>, else the drive's ~3 MB/s or 200 (fast loading)
+        {   // transfer time: R2_DVD_SPEED=<MB/s>, else the drive's ~3 MB/s or 1000 (fast loading)
             static const double forced = [] {
                 const char* v = getenv("R2_DVD_SPEED");
                 return v ? atof(v) : 0.0;
             }();
-            const double mbps = forced > 0 ? forced : settings::get().fastDisc ? 200.0 : 3.0;
+            const double mbps = forced > 0 ? forced : fastDisc ? 1000.0 : 3.0;
             latencyTb += u64(double(s_diOp.len) * double(kTbClock) / (mbps * 1024.0 * 1024.0));
             latencyTb = u64(double(latencyTb) / s_dvdBoost);
         }
@@ -362,7 +363,8 @@ void siUpdateIrq() {
 
 void siPollResponse(int ch, u32& hi, u32& lo) {
     const PadState& p = s_pad[ch];
-    hi = (u32(p.buttons) << 16) | (u32(p.stickX) << 8) | p.stickY;
+    const u16 buttons = (ch == 0) ? u16(p.buttons | mouseMenuPadButtons()) : p.buttons;
+    hi = (u32(buttons) << 16) | (u32(p.stickX) << 8) | p.stickY;
     lo = (u32(p.substickX) << 24) | (u32(p.substickY) << 16) | (u32(p.triggerL) << 8) | p.triggerR;
 }
 
@@ -1061,12 +1063,12 @@ void onAi() {
     // runs as fast as the game handles it and the host's audio cushion covers the delay.
     // Not while a cinematic is skipped: silent, and the audio clock must keep the game's pace.
     const u64 now = tbNow();
-    constexpr u64 kAiWaitMax = kTbClock / 50;  // 20 ms
+    constexpr u64 kAiWaitMax = kTbClock / 10;  // 100 ms
     if (s_audioSpeed == 1.0 && (dspCsr() & CSR_AIDMSK) && s_aiDue && now - s_aiDue < kAiWaitMax &&
         musyxPlaying()) {
         const u32 next = ((u32(dsp[0x30 / 2]) << 16) | dsp[0x32 / 2]) & 0x03FFFFE0;
         if ((dspCsr() & CSR_AIDINT) || next == s_aiDma.addr || musyxFrameBusy()) {
-            schedule(EV_AI, now + kTbClock / 2000);
+            schedule(EV_AI, now + kTbClock / 20000);  // 50 us
             return;
         }
     }
@@ -1095,7 +1097,7 @@ void onAi() {
     // Skipping shortens the blocks: MusyX (synthesis, sequencer, streams) keeps pace.
     u64& due = s_aiDue;
     const u64 period = u64(double(samples) * double(kTbClock) / (double(rate) * s_audioSpeed));
-    due = (due && now - due < 4 * period) ? due + period : now + period;
+    due = (due && now - due < 16 * period) ? due + period : now + period;
     schedule(EV_AI, due);
 }
 
@@ -1247,6 +1249,20 @@ void peWrite(u32 off, u16 v) {
 }
 
 }  // namespace
+
+bool aiCatchUpPending() {
+    return s_aiDma.on && s_audioSpeed == 1.0 && (dspCsr() & CSR_AIDMSK) && s_aiDue && tbNow() >= s_aiDue &&
+           musyxPlaying();
+}
+
+bool aiCatchUpStep() {
+    if (!aiCatchUpPending()) return false;
+    const u32 next = ((u32(dsp[0x30 / 2]) << 16) | dsp[0x32 / 2]) & 0x03FFFFE0;
+    if ((dspCsr() & CSR_AIDINT) || next == s_aiDma.addr || musyxFrameBusy()) return false;
+    unschedule(EV_AI);
+    onAi();
+    return true;
+}
 
 bool viIsFramebuffer(u32 addr) { return std::find(s_viFbs.begin(), s_viFbs.end(), addr) != s_viFbs.end(); }
 
