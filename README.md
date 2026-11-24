@@ -35,7 +35,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 ### Feature Overview Video
 
-[![Red Two macOS Feature Overview](https://img.youtube.com/vi/BdarOFSgR0Y/hqdefault.jpg)](https://www.youtube.com/watch?v=BdarOFSgR0Y)
+[![Red Two macOS+ Feature Overview](https://img.youtube.com/vi/_wnlr6NRlJg/hqdefault.jpg)](https://youtu.be/_wnlr6NRlJg)
 
 ## Controls & Files
 
