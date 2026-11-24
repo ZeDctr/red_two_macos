@@ -113,8 +113,10 @@ void setAudioSpeed(double speed, bool mute) {
 }
 void setDvdBoost(double boost) { s_dvdBoost = boost < 1.0 ? 1.0 : boost; }
 
-void viSetRate(int fps) {
-    s_viHz = fps == 60 ? 60000.0 / 1001.0 : double(fps);
+void viSetRate(int fps) { viSetRateHz(fps == 60 ? 60000.0 / 1001.0 : double(fps)); }
+void viSetRateHz(double hz) {
+    if (hz < 1.0) hz = 60000.0 / 1001.0;
+    s_viHz = hz;
     kViPeriod = u64(double(kTbClock) / s_viHz + 0.5);
     logf("vi", "retrace rate %.2f Hz", s_viHz);
 }
@@ -262,6 +264,9 @@ struct DiOp {
     bool active = false;
     u32 cmd0 = 0, off = 0, len = 0, mar = 0;
 } s_diOp;
+u64 s_diDueTb = 0;  // when the emulated transfer ended (host state: a late read's wait, for the log)
+
+u64 diDiscOffset() { return (s_diOp.cmd0 & 0xC0) == 0x40 ? 0 : u64(s_diOp.off) << 2; }
 
 void onDi() {
     if (!s_diOp.active) return;
@@ -269,8 +274,24 @@ void onDi() {
     if (cmd == 0xA8) {
         u8* dst = physPtr(s_diOp.mar, s_diOp.len);
         if (!dst) fatal("DVD read to bad address %08X len %X", s_diOp.mar, s_diOp.len);
-        const u64 off = (s_diOp.cmd0 & 0xC0) == 0x40 ? 0 : u64(s_diOp.off) << 2;
-        if (!discRead(off, dst, s_diOp.len)) fatal("DVD read past the disc: %llX + %X", (unsigned long long)off, s_diOp.len);
+        const u64 off = diDiscOffset();
+        // The bytes come from the reader thread (disc_reader.cpp), which started at diStart.
+        // Not in yet (a slow drive): the drive finishes later, as a real one with a long seek
+        // would, and the game runs on meanwhile instead of freezing.
+        switch (discTake(off, dst, s_diOp.len)) {
+        case DiscData::Pending:
+            if (!s_diDueTb) s_diDueTb = tbNow();
+            schedule(EV_DI, tbNow() + kTbClock / 1000);
+            return;
+        case DiscData::Failed: fatal("DVD read past the disc: %llX + %X", (unsigned long long)off, s_diOp.len);
+        case DiscData::Ready: break;
+        }
+        if (s_diDueTb) {
+            const u64 now = tbNow();  // (a save state loaded meanwhile moves the time base back)
+            const double ms = now > s_diDueTb ? double(now - s_diDueTb) * 1000.0 / double(kTbClock) : 0.0;
+            s_diDueTb = 0;
+            if (ms >= 20.0) discLate(off, s_diOp.len, ms);
+        }
         watchHost(s_diOp.mar, s_diOp.len, "DVD read");
         di[DIMAR] = s_diOp.mar + s_diOp.len;
     }
@@ -303,6 +324,9 @@ void diStart() {
             const u64 o = u64(s_diOp.off) << 2;
             logf("dvd", "read %08llX len %X -> %08X  %s", (unsigned long long)o, s_diOp.len, s_diOp.mar, discFileAt(o).c_str());
         }
+        s_diDueTb = 0;
+        discNoteRead(diDiscOffset());  // which level the game loads (the log, Discord Rich Presence)
+        discPrefetch(diDiscOffset(), s_diOp.len);
         break;
     case 0xAB: break;  // seek
     case 0x12: {       // inquiry
@@ -522,7 +546,7 @@ u8 iplReadByte() {
     const u32 a = (s_ipl.cmd & 0x7FFFFFFF) >> 6;
     u8 v = 0;
     if ((s_ipl.cmd & 0x7FFFFF00) == 0x20000000) {  // RTC
-        const u32 secs = u32(time(nullptr) - 946684800);  // since 2000-01-01
+        const u32 secs = rtcSeconds();  // local time since 2000-01-01 (cpu.cpp clockInit)
         v = u8(secs >> (24 - 8 * (s_ipl.pos & 3)));
     } else if ((s_ipl.cmd & 0x7FFFFF00) == 0x20000100) {  // SRAM
         v = s_sram[s_ipl.pos & 63];

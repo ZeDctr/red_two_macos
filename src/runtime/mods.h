@@ -40,7 +40,8 @@ FolderKind textureFolderKind(const std::string& dir, std::string* packDir = null
 struct PackInfo {
     std::string path;
     size_t textures = 0;  // replacement registrations
-    bool chosen = false;  // from the folder chosen in the menu (not Red Two's textures folder)
+    bool chosen = false;  // from the folder chosen in the menu (also when it is Red Two's own pack)
+    std::string note;     // no textures: what the folder holds instead ("it holds 1 .zip archive...")
 };
 void texturesInit();               // after Aurora is up: load the packs if enabled
 void setTexturesEnabled(bool on);  // load / unload now (the menu)

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <limits>
 #include <vector>
 
@@ -250,8 +251,16 @@ void mtspr(Ctx& c, u32 spr, u32 v) {
     case 26: c.srr0 = v; return;
     case 27: c.srr1 = v; return;
     case 272: case 273: case 274: case 275: c.sprg[spr - 272] = v; return;
-    case 284: s_tbOffset = (s_tbOffset & ~0xFFFFFFFFull) + v - u32(tbNow()); return;  // TBL write (approximate)
-    case 285: return;                                                                // TBU write
+    case 284: {  // TBL / TBU writes: the guest's time base takes the new half from now on
+        const u64 host = tbNow();
+        s_tbOffset = (((host + s_tbOffset) & ~0xFFFFFFFFull) | v) - host;
+        return;
+    }
+    case 285: {
+        const u64 host = tbNow();
+        s_tbOffset = ((u64(v) << 32) | ((host + s_tbOffset) & 0xFFFFFFFFull)) - host;
+        return;
+    }
     case 25:
         s_spr[25] = v;
         vmSetSdr1(v);
@@ -267,6 +276,47 @@ void mtspr(Ctx& c, u32 spr, u32 v) {
     default: s_spr[spr & 1023] = v; return;
     }
 }
+
+// The console's clock (issue #49: Tatooine and Imperial Academy Heist always at night). On the
+// GameCube the IPL sets the time base to the RTC's time (local time, as set in the console's
+// menu) before the game starts, and games read the time of day from it (OSGetTime). Ours
+// counted from 0 at every start: 2000-01-01 00:00, midnight. Like Dolphin: the time base starts
+// at the PC's local time, and the RTC reads local time too. R2_CLOCK=<hh>[:<mm>] (tests): today
+// at that time.
+namespace {
+s64 s_localBias = 0;  // local wall clock minus UTC, seconds (+ R2_CLOCK's shift)
+constexpr s64 kEpoch2000 = 946684800;  // 2000-01-01 00:00 UTC in Unix seconds
+}  // namespace
+
+void clockInit() {
+    const time_t now = time(nullptr);
+    tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    if (const char* c = getenv("R2_CLOCK"); c && *c) {
+        int h = 0, m = 0;
+        if (sscanf(c, "%d:%d", &h, &m) >= 1) {
+            local.tm_hour = h;
+            local.tm_min = m;
+            local.tm_sec = 0;
+        }
+    }
+#ifdef _WIN32
+    const time_t wall = _mkgmtime(&local);  // the local wall clock's fields read as UTC
+#else
+    const time_t wall = timegm(&local);
+#endif
+    s_localBias = s64(wall) - s64(now);
+    const u64 secs = u64(s64(now) + s_localBias - kEpoch2000);
+    s_tbOffset = secs * kTbClock - tbNow();
+    logf("clock", "the console's clock: %04d-%02d-%02d %02d:%02d (local time%s)", local.tm_year + 1900, local.tm_mon + 1,
+         local.tm_mday, local.tm_hour, local.tm_min, getenv("R2_CLOCK") ? ", R2_CLOCK" : "");
+}
+
+u32 rtcSeconds() { return u32(s64(time(nullptr)) + s_localBias - kEpoch2000); }
 
 u32 mftb(Ctx&, u32 which) {
     const u64 t = tbNow() + s_tbOffset;

@@ -1,0 +1,82 @@
+diff --git a/lib/gfx/texture_replacement.cpp b/lib/gfx/texture_replacement.cpp
+index 2af2f96..c1c0979 100644
+--- a/lib/gfx/texture_replacement.cpp
++++ b/lib/gfx/texture_replacement.cpp
+@@ -1693,39 +1693,49 @@ ReplacementGroup load_replacement_directory(const std::filesystem::path& root, R
+   }
+ 
+   std::vector<ReplacementCandidate> candidates;
+-  std::error_code ec;
+-  for (std::filesystem::recursive_directory_iterator it(
+-           root,
+-           std::filesystem::directory_options::skip_permission_denied |
+-               std::filesystem::directory_options::follow_directory_symlink,
+-           ec);
+-       it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+-    if (ec) {
+-      break;
+-    }
++  // Folder by folder: MSVC's recursive_directory_iterator ends the whole walk at the first folder
++  // it cannot open (a path past MAX_PATH, an unreadable folder), so a pack could load nothing.
++  // A folder that cannot be read is logged and skipped; the rest of the pack still loads.
++  std::vector<std::pair<std::filesystem::path, int>> pending{{root, 0}};
++  while (!pending.empty()) {
++    const auto [dir, depth] = std::move(pending.back());
++    pending.pop_back();
++    std::error_code ec;
++    std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec);
++    for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
++      std::error_code typeEc;
++      if (it->is_directory(typeEc)) {
++        if (depth < 64 && !is_relative_to(it->path(), dumpRoot)) {  // (depth: a symlink loop ends)
++          pending.emplace_back(it->path(), depth + 1);
++        }
++        continue;
++      }
++      if (!it->is_regular_file(typeEc)) {
++        continue;
++      }
+ 
+-    if (!it->is_regular_file()) {
+-      continue;
+-    }
++      const auto& path = it->path();
++      if (is_relative_to(path, dumpRoot)) {
++        continue;
++      }
+ 
+-    const auto& path = it->path();
+-    if (is_relative_to(path, dumpRoot)) {
+-      continue;
+-    }
++      const auto extension = io::fs_path_to_string(path.extension());
++      if (!iequals_ascii(extension, ".dds") && !iequals_ascii(extension, ".png")) {
++        continue;
++      }
+ 
+-    const auto extension = io::fs_path_to_string(path.extension());
+-    if (!iequals_ascii(extension, ".dds") && !iequals_ascii(extension, ".png")) {
+-      continue;
+-    }
++      if (is_sidecar_mip(io::fs_path_to_string(path.stem()))) {
++        continue;
++      }
+ 
+-    if (is_sidecar_mip(io::fs_path_to_string(path.stem()))) {
+-      continue;
++      candidates.push_back({
++          .path = path,
++          .components = path_components(root, path),
++      });
++    }
++    if (ec) {
++      Log.warn("texture_replacement: could not read texture folder {}: {}", io::fs_path_to_string(dir), ec.message());
+     }
+-
+-    candidates.push_back({
+-        .path = path,
+-        .components = path_components(root, path),
+-    });
+   }
+ 
+   std::sort(candidates.begin(), candidates.end(), compare_replacement_candidates);

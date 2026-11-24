@@ -4,6 +4,8 @@
     <windowsSettings>
       <!-- the process code page is UTF-8: fopen and the A functions take UTF-8 paths -->
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <!-- paths past 260 characters (deep texture packs) where Windows allows them (LongPathsEnabled) -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
 </assembly>

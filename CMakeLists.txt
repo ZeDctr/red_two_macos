@@ -5,6 +5,17 @@ if(WIN32)
 elseif(APPLE)
     enable_language(OBJC OBJCXX)
 endif()
+# macOS: Apple Silicon only (memory.cpp's fault handler reads AArch64's exception state)
+if(APPLE AND NOT IOS)
+    if(CMAKE_OSX_ARCHITECTURES)
+        set(_r2_mac_arch "${CMAKE_OSX_ARCHITECTURES}")
+    else()
+        set(_r2_mac_arch "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    if(NOT _r2_mac_arch STREQUAL "arm64")
+        message(FATAL_ERROR "macOS builds are for Apple Silicon (arm64) only, not ${_r2_mac_arch}")
+    endif()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -156,6 +167,7 @@ target_compile_definitions(rcheevos PUBLIC RC_CLIENT_SUPPORTS_HASH PRIVATE _CRT_
 # --- runtime ----------------------------------------------------------------------------
 set(R2_RUNTIME_SOURCES
     src/runtime/main.cpp
+    src/runtime/disc_reader.cpp
     src/runtime/memory.cpp
     src/runtime/cpu.cpp
     src/runtime/events.cpp
@@ -188,7 +200,8 @@ set(R2_RUNTIME_SOURCES
     src/runtime/hotkeys.cpp
     src/runtime/achievements.cpp
     src/runtime/http.cpp
-    src/runtime/update.cpp)
+    src/runtime/update.cpp
+    src/runtime/discord.cpp)
 if(ANDROID)
     add_library(red_two SHARED ${R2_RUNTIME_SOURCES})
     set_target_properties(red_two PROPERTIES OUTPUT_NAME main)  # libmain.so, what SDLActivity loads
@@ -206,6 +219,12 @@ if(R2_RELEASE)
     list(APPEND _r2_update_defs R2_RELEASE_BUILD=1)
 endif()
 set_source_files_properties(src/runtime/update.cpp PROPERTIES COMPILE_DEFINITIONS "${_r2_update_defs}")
+# Discord (discord.cpp): Red Two's application on Discord's developer portal, for Rich Presence
+# (empty: none), and its server's invite (the menu's Join button and a Rich Presence button)
+set(R2_DISCORD_APP_ID "1574605819603984604" CACHE STRING "Discord application ID for Rich Presence (empty: no Rich Presence)")
+set(R2_DISCORD_INVITE "https://discord.gg/cc65jQwbqG" CACHE STRING "Red Two's Discord invite (empty: no Join button)")
+set_source_files_properties(src/runtime/discord.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "R2_DISCORD_APP_ID=\"${R2_DISCORD_APP_ID}\";R2_DISCORD_INVITE=\"${R2_DISCORD_INVITE}\"")
 # Program icon: your own res/icon.ico (not in the repository) when it exists, else Red Two's
 # own res/red_two.ico (no game artwork; what public builds use: -DR2_ICON=res/red_two.ico).
 if(EXISTS "${CMAKE_SOURCE_DIR}/res/icon.ico")
@@ -238,9 +257,9 @@ elseif(ANDROID)
     target_link_libraries(red_two PRIVATE android log dl)
 elseif(APPLE)
     # macOS: position-independent (required on Apple Silicon), no stack protector (as the
-    # generated code), export dynamic symbols for crash backtraces.
+    # generated code), 16 MiB main-thread stack, export dynamic symbols for crash backtraces.
     target_compile_options(red_two PRIVATE -fno-strict-aliasing -fno-stack-protector)
-    target_link_options(red_two PRIVATE -Wl,-export_dynamic)
+    target_link_options(red_two PRIVATE -Wl,-export_dynamic -Wl,-stack_size,0x1000000)
     target_link_libraries(red_two PRIVATE dl pthread)
 else()
     # Not a position-independent executable (save states hold return addresses into it, as

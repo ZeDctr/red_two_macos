@@ -62,11 +62,14 @@ void profilerStart();  // profiler.cpp: R2_PROFILE=<seconds> (call on the guest'
 // perf line every 30 s. diagStart on the guest's host thread; diagFramePresented per frame.
 void diagStart();
 void diagFramePresented(u32 draws, u64 presentTb);  // presentTb: time in aurora_end_frame
+void diagUiFrame();  // the launcher's / shader preparation's frame loop is alive (stall reports there too)
 extern u64 g_idleTb;  // time the guest's host thread waited for the next event (idleWait)
 
 // --- time and events ------------------------------------------------------------------
 constexpr u64 kBusClock = 162000000, kCpuClock = 486000000, kTbClock = kBusClock / 4;
 u64 tbNow();                       // guest time base (40.5 MHz)
+void clockInit();                  // cpu.cpp: the console's clock (time base, RTC) at the PC's local time
+u32 rtcSeconds();                  // cpu.cpp: the RTC (local seconds since 2000-01-01)
 void schedule(int id, u64 atTb);   // (re)arm event id at time base value
 void unschedule(int id);
 bool scheduled(int id);
@@ -118,17 +121,36 @@ Ctx& curCtx();
 void deliverException(Ctx& c, u32 exc, u32 pc);
 
 // --- devices --------------------------------------------------------------------------
+// disc_reader.cpp: the disc image. discRead reads at once (boot); the DVD drive asks for a read
+// with discPrefetch when it starts one (the reader thread brings it in, and what follows it) and
+// takes the bytes with discTake when the emulated transfer ends - Pending: not in yet, finish
+// later (discLate logs a long wait); Failed: past the disc or unreadable.
 bool discOpen(const std::string& path);
 bool discRead(u64 off, void* dst, u32 len);
+void discPrefetch(u64 off, u32 len);
+enum class DiscData { Ready, Pending, Failed };
+DiscData discTake(u64 off, void* dst, u32 len);
+void discLate(u64 off, u32 len, double ms);
 // main.cpp: whether an image is the disc Red Two needs (Rogue Leader, USA, GSWE64 revision 0):
 // "" if so, else why not in a sentence; *what: what it is ("Star Wars Rogue Squadron II (GSWE64),
 // RVZ image, 1.4 GiB") when it could be read
 std::string discProblem(const std::string& path, std::string* what = nullptr);
 std::string discFileAt(u64 off);  // "path+0xoffset" of the disc file containing off (debugging)
+// main.cpp: a DVD read starting at off (hw.cpp diStart). Inside a level resource of
+// Rogue2/lvlPackNN.dat (lNN in its .dir) the level the game loads: logged when it changes, and
+// Discord Rich Presence names it.
+void discNoteRead(u64 off);
+int discLevel();  // the level the game read last (NN of lNN; -1 none yet): log lines
+void discSetLevel(int level);  // (a save state's; logged when it changes)
 void hwInit();
 void viFrameHook();  // called once per guest frame (XFB handoff)
 bool viIsFramebuffer(u32 addr);  // hw.cpp: has the VI been told to scan out this XFB?
 void viSetRate(int fps);   // hw.cpp: retrace rate (60 = 59.94 Hz NTSC, or 90/120/144)
+void viSetRateHz(double hz);  // hw.cpp: any retrace rate
+// gx_bridge.cpp: the retrace rate to play at - the frame rate setting, or with V-Sync on the
+// display's refresh (or a whole fraction of it) that matches it (see there)
+double frameRateHz();
+void presentPaced(bool on);  // gx_bridge.cpp: V-Sync as the setting says (on) or off (a cinematic skip)
 double viRate();           // current retrace rate in Hz
 u32 viRetraceCount();      // retraces so far
 u32 viXfbLines();          // lines the VI scans out (304 for letterboxed cinematics, 450 in game)

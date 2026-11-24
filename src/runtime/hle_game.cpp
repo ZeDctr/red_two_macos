@@ -1,6 +1,7 @@
 // Game-side hooks (hooks.txt) for the port's options: frame rate, skips, cheats (settings.h).
 #include "funcs.h"
 #include "runtime.h"
+#include "discord.h"
 #include "gyro.h"
 #include "savestate.h"
 #include "settings.h"
@@ -1641,10 +1642,14 @@ static void gyroProbe(u32 craft, bool flying) {
 // audio clock (AI DMA -> MusyX: sequencer, voices, streams) as fast and silent, disc reads
 // faster so streams keep up. It ends once the player's craft flies (state +0x370 = 0) in a
 // frame that is not letterboxed: between the crawl and the mission intro the game shows full
-// frames for a moment. Outside missions, after 3 s of full frames.
+// frames for a moment. Outside missions, after 3 s of full frames. And after kSkipMaxSeconds in
+// any case (issue #38): a skipped scene that leads into a letterboxed screen waiting for a button
+// never shows full frames, and the skip ran on at 600 Hz behind "Skipping..." until the player
+// closed the game. Skips take 0.7-4.5 s (a crawl and a mission intro ~3 s; #38's log).
 constexpr double kSkipStep = 8.0 / 60.0;
 constexpr int kSkipHz = 600;
 constexpr double kSkipHoldSecs = 2.0;
+constexpr double kSkipMaxSeconds = 10.0;
 static bool s_skip = false;
 static bool s_bootSkipping = false;
 static std::atomic<bool> s_skipDraws{false};
@@ -1655,6 +1660,7 @@ void bootSkipInit() {
     if (!settings::get().skipLogos) return;
     s_bootSkipping = true;
     viSetRate(kSkipHz);
+    presentPaced(false);
     setDvdBoost(50.0);
 }
 
@@ -1817,6 +1823,7 @@ void hle_GameFrameDelta(Ctx& c) {
                 s_skip = true;
                 logf("skip", "native skip unused by scene; falling back to fast-forward");
                 viSetRate(kSkipHz);
+                presentPaced(false);  // (V-Sync would hold the skip to the display's refresh)
                 setDvdBoost(50.0);
             }
         }
@@ -1827,21 +1834,32 @@ void hle_GameFrameDelta(Ctx& c) {
         s_bootSkipping = wantBootSkip;
         if (s_bootSkipping) {
             viSetRate(kSkipHz);
+            presentPaced(false);
             setDvdBoost(50.0);
         } else if (!s_skip) {
-            viSetRate(s.fps);
+            viSetRateHz(frameRateHz());
+            presentPaced(true);
             setDvdBoost(1.0);
         }
     }
     static double fullFor = 0;  // real seconds of frames that are not letterboxed while skipping
     fullFor = s_skip && !cinematic ? fullFor + real : 0;
+    static double skipFor = 0;  // real seconds since the skip started
+    skipFor = s_skip ? skipFor + real : 0;
     const u32 craft = playerCraft();
     static int flyingFrames = 0;  // (the craft passes through state 0 while it is set up)
     flyingFrames = !cinematic && craft && rd32(craft + 0x370) == 0 ? flyingFrames + 1 : 0;
-    if (s_skip && (!s.skipCutscenes || inFrontEndMenu || flyingFrames >= 10 || fullFor > 3.0)) {
+    const bool skipTooLong = s_skip && skipFor > kSkipMaxSeconds;
+    if (s_skip && (!s.skipCutscenes || inFrontEndMenu || flyingFrames >= 10 || fullFor > 3.0 || skipTooLong)) {
         s_skip = false;
-        logf("skip", "back to play");
-        viSetRate(s.fps);
+        if (skipTooLong)
+            logf("skip", "stopped after %.0f s: still %s, no flying craft (a screen waiting for a button?); "
+                         "the game goes on at normal speed",
+                 skipFor, cinematic ? "letterboxed" : "in full frames");
+        else
+            logf("skip", "back to play after %.1f s", skipFor);
+        viSetRateHz(frameRateHz());
+        presentPaced(true);
         setDvdBoost(1.0);
     }
     s_skipDraws.store(s_skip || (s_bootSkipping && !inFrontEndMenu), std::memory_order_relaxed);
@@ -1855,6 +1873,32 @@ void hle_GameFrameDelta(Ctx& c) {
     }
     keepHealth();
     keepAmmo();
+    // R2_MISSION_WIN=<seconds>[:<n>[:<r>]] (tests: a mission's end without flying it, e.g. Strike at
+    // the Core's finale, issues #33 / #50): once the player's craft has flown that long, what the
+    // mission script's end-mission action (0x2F, ScriptRun's table entry 0x7FC96128) does with a
+    // record {2F, 01, r, n}: game object 0x7FDE8000 +0x271 = (r == 0), +0x274 = n + 1, +0x21A = 1.
+    // r = 0 is a failure (+0x274: the reason, "FrntEnd_missionFailed_level10_<n+1>"; Strike at the
+    // Core's 2F 01 00 00 = "The Millennium Falcon was destroyed"), r = 1 a win.
+    if (static const char* win = getenv("R2_MISSION_WIN"); win && *win) {
+        static double flown = 0;
+        static bool done = false;
+        flown = craft && !cinematic && rd32(craft + 0x370) == 0 ? flown + real : flown;
+        if (!done && flown >= atof(win)) {
+            done = true;
+            u32 n = 0, r = 0;
+            if (const char* c1 = strchr(win, ':')) {
+                n = u32(atoi(c1 + 1));
+                if (const char* c2 = strchr(c1 + 1, ':')) r = u32(atoi(c2 + 1));
+            }
+            constexpr u32 kGame = 0x7FDE8000;
+            if (rd8(kGame + 0x21A) == 0) {
+                wr8(kGame + 0x271, r == 0 ? 1 : 0);
+                wr32(kGame + 0x274, n + 1);
+                wr8(kGame + 0x21A, 1);
+                logf("test", "R2_MISSION_WIN: end-mission action {2F 01 %02X %02X} after %.0f s of flight", r, n, flown);
+            }
+        }
+    }
     craftDiffProbe();
     resultsTest(c);
     unlocksFrame();
@@ -1876,6 +1920,23 @@ void hle_GameFrameDelta(Ctx& c) {
     // also look like a run of panels, nor letterboxed cinematics): the background's panels
     // repeat into the sides
     gfx::setMenuTiling(s.tileMenus && !playerCraft() && !bootScreen() && !cinematic);
+    // Discord Rich Presence (discord.cpp names the mission from the level the game loaded): the
+    // front end (the boot screen, GameState 3 in its loops, game mode 5 - byte r13-19121 =
+    // 0x800962EF, tested by the attract demo's exit 0x7FD79648), paused (GameState 2 with the
+    // craft: checked first, the pause screen may be letterboxed), a letterboxed cinematic (the
+    // crawl, briefings, cutscenes; also while the port skips one), flying (the player's craft
+    // exists), else none (loading, the results).
+    {
+        using discord::Phase;
+        const u32 gameState = rd32(0x7FDE8668);
+        Phase phase = Phase::None;
+        if (bootScreen() || rd8(0x800962EF) == 5) phase = Phase::FrontEnd;
+        else if (craft && gameState == 2 && !s_skip) phase = Phase::Paused;
+        else if (cinematic || s_skip) phase = Phase::Cutscene;
+        else if (gameState == 3) phase = Phase::FrontEnd;
+        else if (craft) phase = Phase::Flying;
+        discord::gameFrame(phase);
+    }
     // R2_DT_LOG: every 10 s, frames and the game time they advanced against the wall clock
     static const bool dtLog = envFlag("R2_DT_LOG");
     if (!dtLog) return;
@@ -3136,7 +3197,8 @@ void hleAfterLoad() {
     s_healthFlying = false;
     if (s_skip) {
         s_skip = false;
-        viSetRate(settings::get().fps);
+        viSetRateHz(frameRateHz());
+        presentPaced(true);
         setDvdBoost(1.0);
         setAudioSpeed(1.0, false);
     }

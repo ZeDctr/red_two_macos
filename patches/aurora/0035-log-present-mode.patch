@@ -1,0 +1,23 @@
+diff --git a/lib/gfx/present_target.cpp b/lib/gfx/present_target.cpp
+index 672fb8f..a2b3553 100644
+--- a/lib/gfx/present_target.cpp
++++ b/lib/gfx/present_target.cpp
+@@ -340,6 +340,18 @@ void submit(const Request& request) {
+   AURORA_ASSERT(render_worker::is_worker_thread(), "Surface configuration must run on the render worker");
+   if (target.dirty || target.appliedRevision != snapshot.revision || target.applied.format != snapshot.format ||
+       target.applied.presentMode != snapshot.presentMode) {
++    if (target.applied.presentMode != snapshot.presentMode) {  // (the log says which one is in use)
++      const auto modeName = [](wgpu::PresentMode m) {
++        switch (m) {
++        case wgpu::PresentMode::Fifo: return "FIFO (V-Sync)";
++        case wgpu::PresentMode::FifoRelaxed: return "FIFO relaxed (V-Sync, late frames shown at once)";
++        case wgpu::PresentMode::Immediate: return "immediate (no V-Sync)";
++        case wgpu::PresentMode::Mailbox: return "mailbox (no V-Sync, no tearing)";
++        default: return "undefined";
++        }
++      };
++      Log.info("{}: present mode {}", target.label, modeName(snapshot.presentMode));
++    }
+     target.applied = {
+         .device = webgpu::g_device,
+         .format = snapshot.format,

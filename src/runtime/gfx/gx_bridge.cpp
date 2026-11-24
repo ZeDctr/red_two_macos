@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <bitset>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -51,6 +52,7 @@ extern "C" __declspec(dllimport) int __stdcall GetSystemMetrics(int);
 extern "C" __declspec(dllimport) int __stdcall ShowWindow(void*, int);
 #endif
 #include "../achievements.h"
+#include "../discord.h"
 #include "../hw/gx_fifo.h"
 #include "../hw/musyx_dsp.h"
 #include "../hotkeys.h"
@@ -180,6 +182,7 @@ void precompileShaders() {
         waited = true;
         const u32 done = st->createdPipelines;
         total = std::max(total, done + queued);
+        diagUiFrame();  // (a freeze here is reported in the log like one in the game)
         pollEvents();
         if (aurora_begin_frame()) {
             drawShaderProgress(done, total, tex.done, tex.total, tex.bytes);
@@ -214,8 +217,17 @@ bool launcherWanted(int argc, char** argv) {
 void runLauncher() {
     logf("gfx", "launcher open");
     const u64 t0 = tbNow();
+    discord::setLauncher(true);  // Rich Presence: "In the launcher"
     launcherOpen();
     for (;;) {
+        diagUiFrame();  // (a freeze here is reported in the log like one in the game)
+        // test: R2_LAUNCHER_FREEZE_TEST=<s> freezes the launcher once, 12 s, that long after it opened
+        if (static double freezeAt = getenv("R2_LAUNCHER_FREEZE_TEST") ? atof(getenv("R2_LAUNCHER_FREEZE_TEST")) : -1.0;
+            freezeAt >= 0 && double(tbNow() - t0) / double(kTbClock) >= freezeAt) {
+            freezeAt = -1.0;
+            logf("gfx", "launcher freeze test: 12 s");
+            SDL_Delay(12000);
+        }
         pollEvents();  // (closing the window quits)
         ra::idle();    // a login from the ACHIEVEMENTS page
         bool start = false;
@@ -226,6 +238,7 @@ void runLauncher() {
         if (start) break;
         SDL_Delay(8);
     }
+    discord::setLauncher(false);
     logf("gfx", "launcher: game started after %.1f s; settings: %s", double(tbNow() - t0) / double(kTbClock),
          settings::summary().c_str());
 }
@@ -359,6 +372,15 @@ void endFrame() {
     const u64 endDone = tbNow();
     frameLog(endStart, endDone);
     diagFramePresented(s_frameDraws, endDone - endStart);  // session log: perf lines, stall reports (profiler.cpp)
+    // test: R2_VSYNC_TOGGLE_TEST=<s> flips V-Sync once that many seconds in, as the menu does
+    static const u64 firstFrameTb = endDone;
+    if (static double flipAt = getenv("R2_VSYNC_TOGGLE_TEST") ? atof(getenv("R2_VSYNC_TOGGLE_TEST")) : -1.0;
+        flipAt >= 0 && double(endDone - firstFrameTb) / double(kTbClock) >= flipAt) {
+        flipAt = -1.0;
+        settings::get().vsync = !settings::get().vsync;
+        logf("gfx", "V-Sync toggle test: %s", settings::get().vsync ? "on" : "off");
+        applyDisplaySettings();
+    }
     tileFrameEnd();
     s_inFrame = false;
     s_frames++;
@@ -1471,6 +1493,35 @@ void tileFrameEnd() {
 }
 }  // namespace
 
+// the display's refresh rate, exact where SDL knows it (119.88 Hz), 0 if unknown
+double displayRefresh() {
+    SDL_Window* w = aurora_get_window();
+    const SDL_DisplayMode* m = w ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w)) : nullptr;
+    if (!m) return 0.0;
+    if (m->refresh_rate_numerator > 0 && m->refresh_rate_denominator > 0)
+        return double(m->refresh_rate_numerator) / double(m->refresh_rate_denominator);
+    return m->refresh_rate > 0 ? double(m->refresh_rate) : 0.0;
+}
+
+int displayRefreshHz() { return int(displayRefresh() + 0.5); }
+
+// The emulated retrace rate. With V-Sync on, a frame waits for the display's refresh: at 144 on
+// a 120 Hz display the game thread waited for Aurora's presents, so the game ran 111-120 frames a
+// second and its sound clock fell up to 28% short. So with V-Sync the retrace follows the
+// display: its refresh when the setting is at or above it, else a whole fraction of it within
+// 1 Hz of the setting (60 on a 120 Hz display: exactly 60.00, no frame shown three times now and
+// then), else the setting. The game paces itself by real time, so any rate keeps its speed.
+double retraceHz() {
+    const settings::Settings& s = settings::get();
+    const double set = s.fps == 60 ? 60000.0 / 1001.0 : double(s.fps);
+    const double r = s.vsync ? displayRefresh() : 0.0;
+    if (r < 30.0) return set;
+    if (set >= r - 1.0) return r;
+    for (int k = 2; k <= 4; k++)
+        if (std::abs(r / k - set) < 1.0) return r / k;
+    return set;
+}
+
 void setMenuTiling(bool on) {
     if (on == s_menuTiling) return;
     s_menuTiling = on;
@@ -1791,7 +1842,7 @@ bool init(int argc, char** argv, std::string& disc, const std::string& discNote)
     }
     cfg.desiredBackend = BACKEND_AUTO;
     cfg.msaa = settings::get().msaa >= 4 ? 4 : 1;  // (WebGPU: 1 or 4 samples)
-    cfg.vsync = settings::get().vsync;
+    cfg.vsync = settings::get().vsync;  // (the game paces itself on its emulated retrace either way)
     s_testClear = envFlag("R2_GFX_TEST");
     if (const char* d = getenv("R2_GX_DUMP")) {
         char* end = nullptr;
@@ -1893,7 +1944,9 @@ bool init(int argc, char** argv, std::string& disc, const std::string& discNote)
     mods::texturesInit();  // texture packs (Dolphin's format) into Aurora's replacement registry
     buttonIconsUpdate();   // Xbox button prompts (button_icons.cpp)
     static const char* backends[] = {"auto", "D3D11", "D3D12", "Metal", "Vulkan", "OpenGL", "OpenGL ES", "WebGPU", "null"};
-    logf("gfx", "Aurora up: %s backend, window %ux%u", backends[info.backend], info.windowSize.width, info.windowSize.height);
+    logf("gfx", "Aurora up: %s backend, window %ux%u, display %d Hz, V-Sync %s (frame rate %d)", backends[info.backend],
+         info.windowSize.width, info.windowSize.height, displayRefreshHz(), settings::get().vsync ? "on" : "off",
+         settings::get().fps);
     input::init(true);  // (before the launcher: the controllers drive it)
     // the launcher; also when there is no usable disc (it asks for one: setting off or not)
     launcherSetDisc(disc, discNote);
@@ -2079,3 +2132,9 @@ void bridgeAfterLoad() {
 }
 
 }  // namespace rt::gfx
+
+namespace rt {
+double frameRateHz() { return gfx::retraceHz(); }
+// A cinematic skip runs the game flat out: frames must not wait for the display meanwhile.
+void presentPaced(bool on) { aurora_enable_vsync(on && settings::get().vsync); }
+}  // namespace rt

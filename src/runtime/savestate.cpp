@@ -31,8 +31,9 @@ volatile bool g_pending = false;
 
 namespace {
 
-constexpr u32 kVersion = 4;  // 2: the port arena (memory.cpp); 3: RetroAchievements progress;
-                             // 4: MEM1's heap extension (memory.cpp, hle_game.cpp)
+constexpr u32 kVersion = 5;  // 2: the port arena (memory.cpp); 3: RetroAchievements progress;
+                             // 4: MEM1's heap extension (memory.cpp, hle_game.cpp); 5: the level
+                             // the game loaded (main.cpp discLevel: the log, Discord)
 struct Header {
     char magic[4];   // "R2ST"
     u32 version;
@@ -98,6 +99,8 @@ void rootSave() {
     hleSaveState(w);
     gfx::bridgeSaveState(w);
     ra::saveState(w);
+    w.section("LEVL");
+    w.pod(discLevel());
     w.section("END ");
     s_done = Done::Saved;
 }
@@ -117,6 +120,10 @@ void rootLoad() {
     hleLoadState(r);
     gfx::bridgeLoadState(r);
     ra::loadState(r);
+    r.section("LEVL");
+    int level = -1;
+    r.pod(level);
+    discSetLevel(level);
     r.section("END ");
     // (the file's checksum matched: a mismatch here is a bug, and the machine is half restored)
     if (!r.ok) fatal("save state %d did not fit this build's layout", s_doneSlot);
@@ -190,8 +197,13 @@ bool readState(int slot) {
         s_error = buf;
         return false;
     }
-    if (h.exeHash != lay.exeHash || h.exeBase != lay.exeBase) {
+    if (h.exeHash != lay.exeHash) {
         snprintf(buf, sizeof buf, "STATE %d IS FROM ANOTHER VERSION OF RED TWO", slot);
+        s_error = buf;
+        return false;
+    }
+    if (h.exeBase != lay.exeBase) {  // (Android, macOS: the program loads somewhere else every start)
+        snprintf(buf, sizeof buf, "STATE %d IS FROM AN EARLIER SESSION", slot);
         s_error = buf;
         return false;
     }

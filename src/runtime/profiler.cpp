@@ -28,6 +28,17 @@ namespace rt {
 
 namespace {
 
+// The level the game loaded last (main.cpp discNoteRead: lNN of Rogue2/lvlPackNN.dat; "l22" the
+// front end), for stall and perf lines. (They showed the byte 0x800962EC before: 22 all through
+// play, the mission's number only from its results on.)
+std::string levelName() {
+    const int l = discLevel();
+    char b[16];
+    if (l >= 0) snprintf(b, sizeof b, "l%02d", l);
+    else snprintf(b, sizeof b, "-");
+    return b;
+}
+
 #ifdef _WIN32
 struct Sym {
     std::string name;
@@ -220,8 +231,8 @@ void stallReport(const std::vector<StallSample>& samples, double ms, bool ongoin
     }
     std::vector<std::pair<std::string, u32>> v(byChain.begin(), byChain.end());
     std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.second > b.second; });
-    logf("stall", "%s %.0f ms without a new frame (level %u); the game thread in %zu samples:",
-         ongoing ? "still waiting:" : "frames again after", ms, unsigned(peekGuest32(0x800962EC) >> 24), samples.size());
+    logf("stall", "%s %.0f ms without a new frame (level %s); the game thread in %zu samples:",
+         ongoing ? "still waiting:" : "frames again after", ms, levelName().c_str(), samples.size());
     for (size_t i = 0; i < v.size() && i < 4; i++)
         logf("stall", "  %3.0f%%  %s", 100.0 * v[i].second / double(samples.size()), v[i].first.c_str());
 }
@@ -234,7 +245,9 @@ std::atomic<u64> s_lastPresent{0};
 #ifdef _WIN32
 void stallWatchdog(HANDLE thread) {
     constexpr u64 kStall = kTbClock / 4;        // 250 ms without a frame
-    constexpr u64 kInterim = 10 * kTbClock;     // a longer one is reported every 10 s meanwhile
+    constexpr u64 kInterim = 10 * kTbClock;     // a longer one is reported every 10 s meanwhile,
+    constexpr u64 kFirst = 2 * kTbClock;        // the first time after 2 s (a game closed during a
+                                                // freeze of a few seconds left no trace: issue #38)
     for (;;) {
         Sleep(20);
         const u64 last = s_lastPresent.load(std::memory_order_relaxed);
@@ -246,7 +259,7 @@ void stallWatchdog(HANDLE thread) {
             if (sampleStack(thread, s.f, kStallDepth)) samples.push_back(s);
             Sleep(5);
             const u64 now = tbNow();
-            if (now - reported >= kInterim && s_lastPresent.load(std::memory_order_relaxed) == last) {
+            if (now - reported >= (reported == last ? kFirst : kInterim) && s_lastPresent.load(std::memory_order_relaxed) == last) {
                 stallReport(samples, double(now - last) * 1000.0 / double(kTbClock), true);
                 samples.clear();
                 reported = now;
@@ -258,7 +271,7 @@ void stallWatchdog(HANDLE thread) {
 }
 #else
 void stallWatchdog() {
-    constexpr u64 kStall = kTbClock / 4, kInterim = 10 * kTbClock;
+    constexpr u64 kStall = kTbClock / 4, kInterim = 10 * kTbClock, kFirst = 2 * kTbClock;
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         const u64 last = s_lastPresent.load(std::memory_order_relaxed);
@@ -267,15 +280,15 @@ void stallWatchdog() {
         while (s_lastPresent.load(std::memory_order_relaxed) == last) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             const u64 now = tbNow();
-            if (now - reported >= kInterim && s_lastPresent.load(std::memory_order_relaxed) == last) {
-                logf("stall", "still waiting: %.0f ms without a new frame (level %u)", double(now - last) * 1000.0 / double(kTbClock),
-                     unsigned(peekGuest32(0x800962EC) >> 24));
+            if (now - reported >= (reported == last ? kFirst : kInterim) && s_lastPresent.load(std::memory_order_relaxed) == last) {
+                logf("stall", "still waiting: %.0f ms without a new frame (level %s)", double(now - last) * 1000.0 / double(kTbClock),
+                     levelName().c_str());
                 reported = now;
             }
         }
         const u64 next = s_lastPresent.load(std::memory_order_relaxed);
-        logf("stall", "frames again after %.0f ms without a new frame (level %u)", double(next - last) * 1000.0 / double(kTbClock),
-             unsigned(peekGuest32(0x800962EC) >> 24));
+        logf("stall", "frames again after %.0f ms without a new frame (level %s)", double(next - last) * 1000.0 / double(kTbClock),
+             levelName().c_str());
     }
 }
 #endif
@@ -298,6 +311,12 @@ void diagStart() {
 #endif
 }
 
+// Before the game: the launcher and the shader preparation screen run their own frame loops on
+// the same thread. Each turn counts as a frame for the stall reports (not for the perf lines),
+// so a freeze there (issue #41: the window stopped responding in the launcher, nothing logged)
+// is reported with that thread's stacks every 10 s.
+void diagUiFrame() { s_lastPresent.store(tbNow(), std::memory_order_relaxed); }
+
 void diagFramePresented(u32 draws, u64 presentTb) {
     const u64 now = tbNow();
     s_lastPresent.store(now, std::memory_order_relaxed);
@@ -318,11 +337,11 @@ void diagFramePresented(u32 draws, u64 presentTb) {
     const double secs = double(now - w.start) / double(kTbClock);
     const double busy = 100.0 * (1.0 - double(g_idleTb - w.idleAtStart) / double(now - w.start));
     logf("perf", "%.0f s: %.1f fps at %.0f Hz, %llu frames over %.1f ms, longest %.0f ms, %llu draws/frame, game thread "
-                 "busy %.0f%% (presenting %.1f ms/frame), level %u, %s",
+                 "busy %.0f%% (presenting %.1f ms/frame), level %s, %s",
          secs, double(w.frames) / secs, viRate(), (unsigned long long)w.slow, 1500.0 / viRate(),
          double(w.longest) * 1000.0 / double(kTbClock), (unsigned long long)(w.draws / std::max<u64>(w.frames, 1)),
          std::clamp(busy, 0.0, 100.0), double(w.present) * 1000.0 / double(kTbClock) / double(std::max<u64>(w.frames, 1)),
-         unsigned(peekGuest32(0x800962EC) >> 24), audio::perfText().c_str());
+         levelName().c_str(), audio::perfText().c_str());
     w = PerfWindow{};
     w.start = w.last = now;
     w.idleAtStart = g_idleTb;

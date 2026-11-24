@@ -19,6 +19,7 @@
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_misc.h>
+#include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <aurora/aurora.h>
@@ -48,6 +49,7 @@
 #include "../hw/musyx_dsp.h"
 #include "../mods.h"
 #include "../achievements.h"
+#include "../discord.h"
 #include "../update.h"
 #include "../gyro.h"
 #include "../runtime.h"
@@ -1123,6 +1125,20 @@ void pageDisplay(settings::Settings& s) {
             if (s.checkUpdates) update::check();
         }
     }
+#ifndef __ANDROID__
+    {
+        // Discord Rich Presence (discord.cpp): on and off at once
+        const std::string help = "Your Discord profile shows that you're playing Red Two, the mission you're in and for how "
+                                 "long. It needs the Discord app open on this PC; nothing else is sent anywhere. " +
+                                 discord::statusText();
+        if (toggleRow("Discord Rich Presence", s.discordPresence, help.c_str())) s_changed = true;
+    }
+#endif
+    if (*discord::invite() &&
+        buttonRow("Red Two's Discord", "JOIN",
+                  "Chat and news on Red Two's Discord server: opens the invite in your browser. Bug reports go on "
+                  "GitHub Issues (see the README's \"Reporting a problem\")."))
+        openUrl(discord::invite());
     if (confirmRow("Quit to desktop", "QUIT", "PRESS AGAIN: QUIT", s_confirmQuit,
                    "Close Red Two. What the game saved to its memory card and your save states are kept; a mission in "
                    "progress is not.")) {
@@ -1178,9 +1194,15 @@ void pageDisplay(settings::Settings& s) {
     heading("PERFORMANCE");
     if (fpsRow("Frame rate", s.fps, "Above 60 the game runs more frames per second at its normal speed."))
         s_changed = s_display = true;
-    if (toggleRow("V-Sync", s.vsync,
-                  "Synchronizes frame presentation with your display's refresh rate to prevent screen tearing during fast motion."))
-        s_changed = s_display = true;
+    {
+        std::string help = "Shows each frame in step with your display's refresh: no tearing, a little more input lag. "
+                           "Best with the frame rate at your display's refresh rate";
+        const int hz = displayRefreshHz();
+        help += hz > 0 ? " (this display: " + std::to_string(hz) + " Hz)." : ".";
+        if (hz > 0 && s.vsync && s.fps > hz + 1)
+            help += " WITH V-SYNC ON THE GAME RUNS AT " + std::to_string(hz) + " FRAMES A SECOND.";
+        if (toggleRow("V-Sync", s.vsync, help.c_str())) s_changed = s_display = true;
+    }
     if (toggleRow("Show frame rate", s.showFps, "Frames per second in the top-left corner.")) s_changed = true;
     if (toggleRow("Prepare shaders at start", s.precompileShaders,
                   s_launcher ? "Before the game starts, compiles every shader it has used on this device (PREPARING "
@@ -1686,16 +1708,34 @@ bool folderRow(const char* text, const char* tag, const char* help, ImU32 tagCol
     return clicked || (sel && s_in.accept);
 }
 
+// 1175 -> "1,175"
+std::string withCommas(size_t n) {
+    std::string d = std::to_string(n);
+    for (int i = int(d.size()) - 3; i > 0; i -= 3) d.insert(size_t(i), ",");
+    return d;
+}
+
+// The textures loaded from the folder chosen in the menu, and why there are none (mods' note)
+size_t chosenPackTextures(std::string* note = nullptr) {
+    size_t n = 0;
+    for (const auto& p : mods::loadedPacks())
+        if (p.chosen) {
+            n += p.textures;
+            if (note && note->empty()) *note = p.note;
+        }
+    return n;
+}
+
 void browseChoose(settings::Settings& s) {
     s.texturesFolder = s_browseDir;
     s.customTextures = true;  // (a folder chosen: textures wanted)
     s_changed = true;
     browseClose();
     mods::setTexturesEnabled(true);  // (loads Red Two's folder and the chosen one again)
-    size_t n = 0;
-    for (const auto& p : mods::loadedPacks()) n += p.chosen ? p.textures : 0;
-    s_modsStatus = n ? std::to_string(n) + " replacement textures loaded from " + s.texturesFolder
-                     : "No replacement textures found in " + s.texturesFolder + ".";
+    std::string note;
+    const size_t n = chosenPackTextures(&note);
+    s_modsStatus = n ? withCommas(n) + " replacement textures loaded from " + s.texturesFolder
+                     : "No replacement textures in " + s.texturesFolder + (note.empty() ? "." : ": " + note + ".");
     logf("menu", "texture folder chosen: %s (%zu textures)", s.texturesFolder.c_str(), n);
 }
 
@@ -2032,14 +2072,21 @@ void pageMods(settings::Settings& s) {
             help = "Pick the folder of a texture pack you downloaded, e.g. in Downloads: the one holding GSWE64, or "
                    "GSWE64 itself. No need to copy it anywhere.";
         } else {
-            caption = fitText(tidyPath(s.texturesFolder).filename().empty() ? s.texturesFolder
-                                                                             : u8str(tidyPath(s.texturesFolder).filename()),
-                              360.f * s_ui);
-            size_t n = 0;
-            for (const auto& p : mods::loadedPacks()) n += p.chosen ? p.textures : 0;
+            // the folder's name and what loaded from it, on the row itself (issue #42: the count
+            // was only in this row's description, and NONE FOUND further down - Dolphin's import -
+            // read as "your pack was not found")
+            std::string note;
+            const size_t n = chosenPackTextures(&note);
             std::error_code ec;
             const bool there = std::filesystem::is_directory(u8path(s.texturesFolder), ec);
-            help = s.texturesFolder + (!there ? ": NOT FOUND." : !s.customTextures ? "" : ": " + std::to_string(n) + " textures.") +
+            const std::string count = !there ? "NOT FOUND" : !s.customTextures ? "" : n ? withCommas(n) + " TEXTURES" : "NO TEXTURES";
+            const std::string name = tidyPath(s.texturesFolder).filename().empty() ? s.texturesFolder
+                                                                                   : u8str(tidyPath(s.texturesFolder).filename());
+            caption = count.empty() ? fitText(name, 360.f * s_ui) : fitText(name, 200.f * s_ui) + "  -  " + count;
+            std::string what;
+            if (!there) what = ": NOT FOUND.";
+            else if (s.customTextures) what = n ? ": " + withCommas(n) + " textures loaded." : ": no textures loaded" + (note.empty() ? std::string(".") : " - " + note + ".");
+            help = s.texturesFolder + what +
                    (s_usingPad ? " A: choose another, X: stop using it." : " Enter: choose another, Delete: stop using it.");
         }
         if (buttonRow("Texture pack folder", caption.c_str(), help.c_str(), s.texturesFolder.empty() ? kText : kAmber)) {
@@ -2054,9 +2101,24 @@ void pageMods(settings::Settings& s) {
             mods::reloadTextures();
         }
     }
-    if (buttonRow("Red Two's textures folder", "OPEN",
-                  "Opens Red Two's own textures folder in the file manager (packs go in a GSWE64 folder inside, as in "
-                  "Dolphin). Not shown in the Steam Deck's Game Mode: use Texture pack folder there.")) {
+    std::string ownHelp =
+        "Opens Red Two's own textures folder in the file manager (packs go in a GSWE64 folder inside, as in Dolphin). "
+        "Not shown in the Steam Deck's Game Mode: use Texture pack folder there.";
+    if (s.customTextures) {  // what loaded from it
+        const std::string own = mods::texturesDir();
+        size_t n = 0, packs = 0;
+        std::string note;
+        for (const auto& p : mods::loadedPacks())
+            if (p.path.size() >= own.size() && SDL_strncasecmp(p.path.c_str(), own.c_str(), own.size()) == 0) {
+                packs++;
+                n += p.textures;
+                if (note.empty()) note = p.note;
+            }
+        ownHelp += !packs ? " Nothing in it yet (no GSWE64 folder)."
+                   : n    ? " " + withCommas(n) + " textures loaded from it."
+                          : " No textures loaded from it" + (note.empty() ? std::string(".") : " - " + note + ".");
+    }
+    if (buttonRow("Red Two's textures folder", "OPEN", ownHelp.c_str())) {
         const std::string dir = mods::texturesDir();  // (one string: begin and end of the same one)
         std::error_code ec;
         std::filesystem::create_directories(u8path(dir), ec);
@@ -2102,7 +2164,7 @@ void pageMods(settings::Settings& s) {
             help = "Saved " + sv.when + " in " + sv.where + ". Replaces Red Two's save (old card kept in saves\\backup), restarts.";
         }
         const int row = s_row;
-        const bool pressed = buttonRow("Save data", !have ? "NONE FOUND" : s_confirmSave ? "PRESS AGAIN: REPLACE" : "IMPORT",
+        const bool pressed = buttonRow("Save data", !have ? "NOT IN DOLPHIN" : s_confirmSave ? "PRESS AGAIN: REPLACE" : "IMPORT",
                                        help.c_str(), have ? (s_confirmSave ? kAmber : kText) : kDim);
         if (s_rowSel[s_section] != row) s_confirmSave = false;
         if (pressed && have) {
@@ -2126,12 +2188,14 @@ void pageMods(settings::Settings& s) {
         for (const auto& p : s_dolphin.packs) files += p.files, bytes += p.bytes;
         bool imported = have;
         for (const auto& p : s_dolphin.packs) imported &= p.imported;
-        std::string caption = !have ? "NONE FOUND" : imported ? "UP TO DATE" : "IMPORT";
+        std::string caption = !have ? "NOT IN DOLPHIN" : imported ? "UP TO DATE" : "IMPORT";
         if (copy.running) {
             const uint64_t t = copy.bytesTotal, d = copy.bytesDone;
             caption = "COPYING " + std::to_string(t ? int(d * 100 / t) : 0) + "%";
         }
-        std::string help = "No Rogue Leader texture pack in Dolphin's Load\\Textures folder.";
+        std::string help = "Dolphin's Load\\Textures folder has no Rogue Leader pack to copy. This row only imports "
+                           "from Dolphin: a pack in Red Two's textures folder or the Texture pack folder above loads "
+                           "without it.";
         if (have)
             help = std::to_string(files) + " files (" + gigabytes(bytes) + ")" + (imported ? ", already copied from " : ", copied from ") +
                    s_dolphin.packs.front().path;
@@ -2149,7 +2213,7 @@ void pageMods(settings::Settings& s) {
         const std::string help = have ? std::to_string(n) + (n == 1 ? " code" : " codes") + " for this game in Dolphin (" +
                                             std::to_string(on) + " enabled there), kept on or off as they are there."
                                       : "Dolphin has no codes for Rogue Leader.";
-        if (buttonRow("Codes", have ? "IMPORT" : "NONE FOUND", help.c_str(), have ? kText : kDim) && have) {
+        if (buttonRow("Codes", have ? "IMPORT" : "NOT IN DOLPHIN", help.c_str(), have ? kText : kDim) && have) {
             std::string msg;
             mods::importCodes(s_dolphin, msg);
             s_modsStatus = msg;
@@ -2949,6 +3013,13 @@ void menuEvent(const void* p) {
     if (e.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN) s_enteredFullscreen = true;
     if (e.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) s_enteredFullscreen = false;
 #endif
+    // the window moved to another display, or the display's mode changed: with V-Sync the
+    // retrace follows its refresh
+    if ((e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || e.type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED) &&
+        settings::get().vsync && !cinematicSkip()) {
+        logf("gfx", "display now %d Hz", displayRefreshHz());
+        viSetRateHz(frameRateHz());
+    }
     if (rebindingNow()) return;  // rebinding takes these
     if (s_launcher) {  // no opening or closing: Esc only leaves the folder browser / the disc page
         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.key == SDLK_ESCAPE && !s_textEditing) menuStepBack();
@@ -3029,13 +3100,14 @@ void applyDisplaySettings() {
     aurora_enable_vsync(s.vsync);
     AuroraSetUberShaders(uberShaderMode());
     AuroraSetForcedAnisotropy(u16(s.anisotropy));  // (Aurora patch 0030)
+    aurora_enable_vsync(s.vsync);  // (the surface is set up again on the render worker when it changes)
     // widescreen: letterboxed cinematics fill the screen (4:3 keeps the original bars)
     AuroraSetLetterboxFill(s.aspect != settings::Aspect::R4_3);
     if (SDL_Window* w = aurora_get_window()) {
         const bool full = (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
         if (full != s.fullscreen) SDL_SetWindowFullscreen(w, s.fullscreen);
     }
-    viSetRate(s.fps);
+    viSetRateHz(frameRateHz());  // (the frame rate setting; with V-Sync in step with the display)
 }
 
 // Before the game starts, every pipeline in the cache is built (gx_bridge.cpp precompileShaders);

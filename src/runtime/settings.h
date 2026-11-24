@@ -44,6 +44,9 @@ struct Settings {
     bool launcher = true;
     // At start, ask GitHub whether a newer release is out (update.cpp); the menu offers it.
     bool checkUpdates = true;
+    // Discord Rich Presence (discord.cpp): the player's Discord profile shows the mission and what
+    // they are doing in it, through the Discord app on this computer. Off: nothing goes to Discord.
+    bool discordPresence = true;
     // The game disc image chosen in the launcher (its disc page): used at every start unless
     // --disc gives another; empty or unusable: found next to the program, else asked for.
     std::string discPath;
@@ -57,6 +60,11 @@ struct Settings {
     // above that it shows as a coarse grid (the Hoth sky). Off like Dolphin's "Disable Dithering" code.
     bool gameDither = false;
     int fps = 60;  // 60, 90, 120 or 144: the emulated retrace rate
+    // V-Sync: frames are shown in step with the display's refresh (WebGPU's FIFO present mode).
+    // Off: the newest frame is shown at the next refresh without waiting (mailbox; no tearing in
+    // a window or borderless fullscreen), as before. The game paces itself on its emulated retrace
+    // either way; with V-Sync on a frame rate above the display's refresh waits for it.
+    bool vsync = false;
     bool showFps = false;
     // Multisample anti-aliasing: 1 (off) or 4 samples (WebGPU allows no other count); Aurora sets
     // it up when it starts, so a change applies from the next start
@@ -75,7 +83,6 @@ struct Settings {
     // gx_bridge.cpp precompileShaders). Off: the game starts at once and they compile while it
     // runs (objects whose shader is not ready yet are skipped for a few frames: pop-in).
     bool precompileShaders = true;
-    bool vsync = true;           // synchronize presentation with display refresh (prevents screen tearing)
     // audio
     int volume = 100;            // master volume, 0..100 (output gain (volume/100)^2)
     bool backgroundAudio = true;  // keep playing while the window is in the background

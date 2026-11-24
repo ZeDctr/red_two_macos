@@ -74,6 +74,7 @@ void set(const std::string& key, const std::string& value) {
     else if (key == "volume") s.volume = n < 0 ? 0 : n > 100 ? 100 : n;
     else if (key == "background_audio") s.backgroundAudio = parseBool(value);
     else if (key == "check_updates") s.checkUpdates = parseBool(value);
+    else if (key == "discord_presence") s.discordPresence = parseBool(value);
     else if (key == "speakers") {
         for (int i = 0; i < int(Speakers::Count); i++)
             if (value == speakersName(Speakers(i))) s.speakers = Speakers(i);
@@ -202,11 +203,11 @@ std::string summary() {
     const Settings& s = s_settings;
     char b[4096];
     snprintf(b, sizeof b,
-             "disc_path=%s launcher=%d check_updates=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d game_dither=%d "
+             "disc_path=%s launcher=%d check_updates=%d discord_presence=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d vsync=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d game_dither=%d "
              "show_fps=%d volume=%d background_audio=%d speakers=%s skip_logos=%d skip_cutscenes=%d fast_disc=%d invincible=%d "
              "infinite_lives=%d infinite_ammo=%d perfect_stats=%d all_craft=%d custom_textures=%d prefetch_textures=%d "
              "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d stick_curve=%s cstick_deadzone=%d cstick_sensitivity=%d bumper_clicks=%d gyro=%s gyro_button=%s gyro_speed=%d/%d gyro_invert_y=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
-             s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.checkUpdates, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.ubershaders, s.precompileShaders, s.hudEdges,
+             s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.checkUpdates, s.discordPresence, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.vsync, s.ubershaders, s.precompileShaders, s.hudEdges,
              s.tileMenus, s.gameDither, s.showFps, s.volume, s.backgroundAudio, speakersName(s.speakers), s.skipLogos, s.skipCutscenes,
              s.fastDisc, s.invincible, s.infiniteLives, s.infiniteAmmo, s.perfectStats, s.allCraft, s.customTextures,
              s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, stickCurveName(s.stickCurve), s.cStickDeadzone, s.cStickSensitivity, s.bumperClicks, gyroModeName(s.gyroMode),
@@ -239,6 +240,7 @@ void save() {
     fprintf(f, "# 0 4:3, 1 16:9, 2 16:10, 3 21:9, 5 match the window (at most 21:9)\n");
     fprintf(f, "aspect=%d\n", s.aspect == Aspect::Window ? 5 : int(s.aspect));
     fprintf(f, "fps=%d\n", s.fps);
+    fprintf(f, "# frames shown in step with the display's refresh (no tearing, a little more input lag)\n");
     fprintf(f, "vsync=%d\n", s.vsync);
     fprintf(f, "show_fps=%d\n", s.showFps);
     fprintf(f, "# a generic shader draws objects whose own shader is still compiling (no pop-in)\n");
@@ -254,6 +256,8 @@ void save() {
     fprintf(f, "background_audio=%d\n", s.backgroundAudio);
     fprintf(f, "# ask GitHub for a newer release at start (the menu offers to install it)\n");
     fprintf(f, "check_updates=%d\n", s.checkUpdates);
+    fprintf(f, "# Discord Rich Presence: your Discord profile shows the mission (through the Discord app on this PC)\n");
+    fprintf(f, "discord_presence=%d\n", s.discordPresence);
     fprintf(f, "# auto (the system's speaker setup), stereo (Pro Logic II matrix-encoded), 5.1 or 7.1\n");
     fprintf(f, "speakers=%s\n", speakersName(s.speakers));
     fprintf(f, "skip_logos=%d\n", s.skipLogos);

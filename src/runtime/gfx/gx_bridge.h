@@ -20,6 +20,8 @@ void menuDraw();                       // inside a frame, before it ends (ImGui)
 void drawShaderProgress(u32 done, u32 total, u64 texDone, u64 texTotal, u64 texBytes);
 void applyDisplaySettings();           // resolution, aspect, fullscreen, frame rate -> Aurora/VI
 int uberShaderMode();                  // AuroraSetUberShaders' mode: 0 off, 1 hybrid (R2_UBER overrides)
+int displayRefreshHz();                // gx_bridge.cpp: the refresh rate of the window's display, rounded (0: unknown)
+double retraceHz();                    // gx_bridge.cpp: the retrace rate to play at (rt::frameRateHz)
 void menuImGuiInit(const void* windowSize);  // Aurora's ImGui init callback: fonts and style
 // menu.cpp: the launcher - the settings menu before the game boots (gx_bridge.cpp runLauncher)
 void launcherOpen();

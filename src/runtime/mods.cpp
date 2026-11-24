@@ -21,6 +21,7 @@
 #include <aurora/texture.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -99,6 +100,65 @@ void unload() {
     s_packs.clear();
 }
 
+// A pack folder that gave no textures: what it holds instead, in a sentence for the log and the
+// menu (issue #42: "0 textures" said nothing about why). Walked folder by folder, at most 50,000
+// entries; folders that cannot be read are counted, not fatal.
+std::string emptyPackNote(const std::string& dir) {
+    size_t named = 0, images = 0, archives = 0, other = 0, folders = 0, unreadable = 0, seen = 0;
+    std::string archiveName, unreadableName;
+    std::vector<std::pair<fs::path, int>> pending{{u8(dir), 0}};
+    while (!pending.empty() && seen < 50000) {
+        const auto [d, depth] = pending.back();
+        pending.pop_back();
+        std::error_code ec;
+        fs::directory_iterator it(d, fs::directory_options::skip_permission_denied, ec);
+        for (; !ec && it != fs::directory_iterator() && seen < 50000; it.increment(ec)) {
+            seen++;
+            std::error_code tec;
+            if (it->is_directory(tec)) {
+                folders++;
+                if (depth < 32) pending.emplace_back(it->path(), depth + 1);
+                continue;
+            }
+            std::string ext = str(it->path().extension());
+            for (char& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+            const std::string name = str(it->path().filename());
+            if (ext == ".dds" || ext == ".png") {
+                if (name.size() > 5 && ieq(name.substr(0, 5), "tex1_")) named++;
+                else images++;
+            } else if (ext == ".zip" || ext == ".7z" || ext == ".rar") {
+                if (!archives++) archiveName = name;
+            } else {
+                other++;
+            }
+        }
+        if (ec) {
+            if (!unreadable++) unreadableName = str(d);
+        }
+    }
+    std::string note;
+    const auto plural = [](size_t n, const char* one, const char* many) {
+        return std::to_string(n) + " " + (n == 1 ? one : many);
+    };
+    if (named)
+        note = plural(named, "texture file (tex1_...) is", "texture files (tex1_...) are") +
+               " in it, but none could be registered" + (unreadable ? "" : " (their names are not in Dolphin's format)");
+    else if (archives)
+        note = "it holds " + plural(archives, "archive", "archives") + " (" + archiveName +
+               (archives > 1 ? ", ..." : "") + "): unpack the pack into this folder";
+    else if (images)
+        note = "it holds " + plural(images, ".dds / .png file", ".dds / .png files") +
+               ", none named like a Dolphin texture (tex1_...)";
+    else if (!folders && !other && !unreadable)
+        note = "the folder is empty";
+    else
+        note = "no .dds or .png files in it (" + plural(folders, "folder", "folders") + ", " + plural(other, "other file", "other files") + ")";
+    if (unreadable)
+        note += "; " + plural(unreadable, "folder", "folders") + " could not be read (" + unreadableName +
+                "): a path too long for Windows, or no permission";
+    return note;
+}
+
 void load() {
     unload();
     // Red Two's own textures folder (Dolphin's rules), bundled app textures, then the folder chosen in the menu
@@ -122,12 +182,18 @@ void load() {
     }
     for (size_t i = 0; i < dirs.size(); i++) {
         const auto& [dir, chosen] = dirs[i];
-        bool seen = false;  // (the chosen folder may be Red Two's own pack)
+        bool seen = false;  // (the chosen folder may be Red Two's own pack: then that one is it)
         for (size_t j = 0; j < i; j++) seen |= ieq(dirs[j].first, dir.c_str());
-        if (seen) continue;
+        if (seen) {
+            for (PackInfo& p : s_packs)
+                if (chosen && ieq(p.path, dir.c_str())) p.chosen = true;
+            continue;
+        }
         auto group = aurora::texture::load_replacement_directory(u8(dir));
-        PackInfo info{dir, group.registrations.size(), chosen};
-        logf("mods", "texture pack %s: %zu textures%s", dir.c_str(), info.textures, chosen ? " (chosen folder)" : "");
+        PackInfo info{dir, group.registrations.size(), chosen, {}};
+        if (!info.textures) info.note = emptyPackNote(dir);
+        logf("mods", "texture pack %s: %zu textures%s%s%s", dir.c_str(), info.textures, chosen ? " (chosen folder)" : "",
+             info.note.empty() ? "" : " - ", info.note.c_str());
         s_groups.push_back(std::move(group));
         s_packs.push_back(std::move(info));
     }
