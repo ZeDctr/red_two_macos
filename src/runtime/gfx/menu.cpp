@@ -3226,19 +3226,32 @@ void menuDraw() {
     }
     // documentary / teaser video overlay: auto-hiding progress bar (2 s) + centered pause menu
     if (!s_open) {
-        const MovieOverlay mv = movieOverlay();
-        if (mv.active && mv.totalSec > 0.0) {
+        auto calcGameUiBox = [&](float& offsetX, float& offsetY, float& sx, float& sy) {
             const float winW = io.DisplaySize.x;
             const float winH = io.DisplaySize.y;
             const u32 xfbLines = viXfbLines();
             const float logicalH = (xfbLines >= 200u && xfbLines <= 528u) ? float(xfbLines) : 448.f;
-            const float aspect43W = winH * (4.f / 3.f);
-            const float boxW = std::min(winW, aspect43W);
-            const float boxH = (winW < aspect43W) ? (winW * (3.f / 4.f)) : winH;
-            const float offsetX = (winW - boxW) * 0.5f;
-            const float offsetY = (winH - boxH) * 0.5f;
-            const float sx = boxW / 640.f;
-            const float sy = boxH / logicalH;
+            const float da = displayAspect();
+            const float contentAspect = (da > 0.f) ? da : (winW / std::max(winH, 1.f));
+            float vpW = winW, vpH = winH;
+            if (winW / std::max(winH, 1.f) > contentAspect) {
+                vpW = winH * contentAspect;
+            } else {
+                vpH = winW / contentAspect;
+            }
+            const float vpX = (winW - vpW) * 0.5f;
+            const float vpY = (winH - vpH) * 0.5f;
+            const float boxH = vpH;
+            const float boxW = vpH * (4.f / 3.f);
+            offsetX = vpX + (vpW - boxW) * 0.5f;
+            offsetY = vpY;
+            sx = boxW / 640.f;
+            sy = boxH / logicalH;
+        };
+        const MovieOverlay mv = movieOverlay();
+        if (mv.active && mv.totalSec > 0.0) {
+            float offsetX = 0.f, offsetY = 0.f, sx = 1.f, sy = 1.f;
+            calcGameUiBox(offsetX, offsetY, sx, sy);
 
             const double actionAge = mv.lastActionTb ? double(now - mv.lastActionTb) / double(kTbClock) : 99.0;
             const bool showBar = mv.paused || actionAge < 2.0;
@@ -3247,11 +3260,7 @@ void menuDraw() {
 
                 const float barX0 = offsetX + 200.f * sx;
                 const float barX1 = offsetX + 440.f * sx;
-#ifdef __APPLE__
-                const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
-#else
-                const float barCy = offsetY + (418.f - 18.f - 10.f) * sy;
-#endif
+                const float barCy = offsetY + (418.f - 18.f - 12.5f) * sy;
                 const float barH = 12.f * sy;
                 const float barY0 = barCy - barH * 0.5f;
                 const float barY1 = barCy + barH * 0.5f;
@@ -3363,27 +3372,14 @@ void menuDraw() {
         if (mh.active) {
             const double total = mh.totalSec;
             const double elapsed = (total > 0.0) ? std::clamp(mh.elapsedSec, 0.0, total) : std::max(0.0, mh.elapsedSec);
-            const float winW = io.DisplaySize.x;
-            const float winH = io.DisplaySize.y;
-            const u32 xfbLines = viXfbLines();
-            const float logicalH = (xfbLines >= 200u && xfbLines <= 528u) ? float(xfbLines) : 448.f;
-            const float aspect43W = winH * (4.f / 3.f);
-            const float boxW = std::min(winW, aspect43W);
-            const float boxH = (winW < aspect43W) ? (winW * (3.f / 4.f)) : winH;
-            const float offsetX = (winW - boxW) * 0.5f;
-            const float offsetY = (winH - boxH) * 0.5f;
-            const float sx = boxW / 640.f;
-            const float sy = boxH / logicalH;
+            float offsetX = 0.f, offsetY = 0.f, sx = 1.f, sy = 1.f;
+            calcGameUiBox(offsetX, offsetY, sx, sy);
 
             // Bar sits centered between elapsed (x=165) and remaining (x=475),
             // vertically centered on the y=418 native text row (minus 18-line EFB crop offset).
             const float barX0 = offsetX + 200.f * sx;
             const float barX1 = offsetX + 440.f * sx;
-#ifdef __APPLE__
-            const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
-#else
-            const float barCy = offsetY + (418.f - 18.f - 10.f) * sy;
-#endif
+            const float barCy = offsetY + (418.f - 18.f - 12.5f) * sy;
             const float barH = 12.f * sy;
             const float barY0 = barCy - barH * 0.5f;
             const float barY1 = barCy + barH * 0.5f;
