@@ -26,7 +26,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 - **Redesigned Music Hall**: clean paginated track list for all 114 tracks with track durations and live elapsed/remaining playback timers.
 - **Audio Commentary Controls & Overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay, with game-styled HUD typography.
 - **Art Gallery Captions**: native in-game font title and slide counter for all 27 concept art pieces and renders.
-- **Nintendo Switch Pro Controller** auto-detection & button prompts (`SWITCH`), plus a generic Right Analog Stick icon replacing the baked GameCube C-stick in *Select Craft*.
+- **Nintendo Switch Button Prompts & Select Craft C-Stick Fix**: adds dedicated **Nintendo Switch** (Pro Controller / Joy-Con) auto-detection and on-screen button prompts (`Switch`, alongside `Xbox`, `PlayStation`, and `GameCube`), plus fixes the previously unreplaced GameCube C-stick icon on the *Select Craft* screen with a clean generic Right Analog Stick icon.
 - **Streamlined Menu & Mouse Navigation**: *Special Features* and *Rogue Leaders* promoted directly into the Main Menu (*Start*, *Special Features*, *Rogue Leaders*, *Options* with *Passcodes*, *Quit*), with mouse hover/click support across front-end menus.
 - **Faster Boot & Cutscene Skip**: eliminated multi-second black-screen delays before the 3D intro with *Fast loading*, extended *Skip intro logos* to cover initial splash screens, and game-styled `HOLD TO SKIP` prompt.
 - **Smooth Cutscene & Credits Audio**: immediate safepoint AI/MusyX catch-up prevents choppy/stuttering music both with and without V-Sync (including on ProMotion displays).
