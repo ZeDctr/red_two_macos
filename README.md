@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="res/macos_icon.png" width="220" alt="Red Two macOS Icon">
+  <img src="res/macos_icon.png" width="220" alt="Red Two Plus Icon">
 </p>
 
-# Red Two macOS+
+# Red Two Plus
 
-An enhanced **macOS (Apple Silicon / Metal)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.3** with additional UI, audio, and quality-of-life enhancements.
+An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.3** with additional UI, audio, cinema framing, and quality-of-life enhancements.
 
-The game's PowerPC code is translated to C++ ahead of time and runs natively on Apple Silicon via Metal (Aurora) and SDL3. **No game data or texture packs are included**: you need your own disc image of the USA release (`GSWE64`, revision 0), for both the `.app` download and your own build.
+The game's PowerPC code is translated to C++ ahead of time and runs natively via Aurora (Metal on macOS, Direct3D 12 / Vulkan on Windows) and SDL3. **No game data or texture packs are included**: you need your own disc image of the USA release (`GSWE64`, revision 0), for both the prebuilt downloads and your own build.
 
 ## Quick Start
 
@@ -19,10 +19,11 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 3. Open `Red Two.app` and select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
 4. Optional: copy a Dolphin HD texture pack (`GSWE64` folder) into `~/Library/Application Support/Red Two/textures/` or pick its folder under **F1 → MODS → Texture pack folder**.
 
-## macOS+ Enhancements (on top of Red Two v1.3)
+## Red Two Plus Enhancements (on top of Red Two v1.3)
 
-- **Native Apple Silicon (ARM64) & Metal** backend via Aurora + SDL3, packaged as a standalone `.app` bundle with custom icon and macOS Game Mode support.
-- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar, mouse support, and **native in-game font UI** for the pause menu and timestamps.
+- **Native Apple Silicon (ARM64 / Metal) & Experimental Windows (x64 / D3D12 & Vulkan)** builds via Aurora + SDL3, with custom weathered app icon and macOS Game Mode support.
+- **Authentic Cinema Letterbox Framing**: cutscenes, intro, crawl, and credits keep their native cinema aspect ratio with top/bottom letterbox bars and no off-screen side pop-ins across all widescreen resolutions, while *Select Mission*, *Select Craft*, and front-end menus stay in clean unstretched widescreen.
+- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar with locked timestamps, mouse support, and **native in-game font UI** for the pause menu.
 - **Redesigned Music Hall**: clean paginated track list for all 114 tracks with track durations and live elapsed/remaining playback timers.
 - **Audio Commentary Controls & Overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay, with game-styled HUD typography.
 - **Art Gallery Captions**: native in-game font title and slide counter for all 27 concept art pieces and renders.
@@ -35,7 +36,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 ### Feature Overview Video
 
-[![Red Two macOS+ Feature Overview](https://img.youtube.com/vi/_wnlr6NRlJg/hqdefault.jpg)](https://youtu.be/_wnlr6NRlJg)
+[![Red Two Plus Feature Overview](https://img.youtube.com/vi/_wnlr6NRlJg/hqdefault.jpg)](https://youtu.be/_wnlr6NRlJg)
 
 ## Controls & Files
 
