@@ -3087,6 +3087,18 @@ static void applyDisplayAspect() {
     AuroraSetDisplayAspect(a);
 }
 
+static int s_appliedLetterboxFill = -1;
+static void applyLetterboxFill() {
+    // Always preserve cinema letterbox bars in cutscenes & credits (304 lines) across all aspect
+    // ratios so the vertical framing stays authentic; still stretch the tiny 450->480 margin in gameplay.
+    const u32 lines = viXfbLines();
+    const bool cinematic = lines > 0 && lines < 400;
+    const bool fill = !cinematic && settings::get().aspect != settings::Aspect::R4_3;
+    if (int(fill) == s_appliedLetterboxFill) return;
+    s_appliedLetterboxFill = int(fill);
+    AuroraSetLetterboxFill(fill);
+}
+
 // ubershaders (Aurora patch 0021): R2_UBER=0/1/2 (off, hybrid, every draw: testing) overrides
 int uberShaderMode() {
     static const char* uberEnv = getenv("R2_UBER");
@@ -3101,8 +3113,7 @@ void applyDisplaySettings() {
     AuroraSetUberShaders(uberShaderMode());
     AuroraSetForcedAnisotropy(u16(s.anisotropy));  // (Aurora patch 0030)
     aurora_enable_vsync(s.vsync);  // (the surface is set up again on the render worker when it changes)
-    // widescreen: letterboxed cinematics fill the screen (4:3 keeps the original bars)
-    AuroraSetLetterboxFill(s.aspect != settings::Aspect::R4_3);
+    applyLetterboxFill();
     if (SDL_Window* w = aurora_get_window()) {
         const bool full = (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
         if (full != s.fullscreen) SDL_SetWindowFullscreen(w, s.fullscreen);
@@ -3156,6 +3167,7 @@ void menuDraw() {
     // widescreen: the game's cameras take the aspect the frame is rendered at (so they also cull
     // for it); 4:3 restores the original
     applyDisplayAspect();  // match window: a resize may cross the 21:9 limit
+    applyLetterboxFill();
     {
         u32 w = 0, h = 0;
         AuroraGetRenderSize(&w, &h);
