@@ -3247,7 +3247,11 @@ void menuDraw() {
 
                 const float barX0 = offsetX + 200.f * sx;
                 const float barX1 = offsetX + 440.f * sx;
+#ifdef __APPLE__
+                const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
+#else
                 const float barCy = offsetY + (418.f - 18.f - 15.f) * sy;
+#endif
                 const float barH = 12.f * sy;
                 const float barY0 = barCy - barH * 0.5f;
                 const float barY1 = barCy + barH * 0.5f;
@@ -3375,7 +3379,11 @@ void menuDraw() {
             // vertically centered on the y=418 native text row (minus 18-line EFB crop offset).
             const float barX0 = offsetX + 200.f * sx;
             const float barX1 = offsetX + 440.f * sx;
+#ifdef __APPLE__
+            const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
+#else
             const float barCy = offsetY + (418.f - 18.f - 15.f) * sy;
+#endif
             const float barH = 12.f * sy;
             const float barY0 = barCy - barH * 0.5f;
             const float barY1 = barCy + barH * 0.5f;
