@@ -3267,32 +3267,64 @@ void menuDraw() {
             sx = boxW / 640.f;
             sy = boxH / logicalH;
         };
-        const MovieOverlay mv = movieOverlay();
-        if (mv.active && mv.totalSec > 0.0) {
+        auto drawGameShadowText = [&](float px, ImVec2 pos, ImU32 col, const char* txt, float sp, float a) {
+            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
+            const float sh = std::max(2.f, px * 0.08f);
+            drawText(fg, fnt, px, ImVec2(pos.x + sh, pos.y + sh), IM_COL32(0, 0, 0, int(215 * a)), txt, sp);
+            drawText(fg, fnt, px, pos, col, txt, sp);
+        };
+        auto drawPlaybackBar = [&](double curSec, double totalSec) {
             float offsetX = 0.f, offsetY = 0.f, sx = 1.f, sy = 1.f;
             calcGameUiBox(offsetX, offsetY, sx, sy);
 
+            const double el = (totalSec > 0.0) ? std::clamp(curSec, 0.0, totalSec) : std::max(0.0, curSec);
+            const double rem = (totalSec > 0.0) ? std::max(0.0, totalSec - el) : 0.0;
+            const int elSec = int(el + 0.5);
+            const int remSec = int(rem + 0.5);
+            char elBuf[16], remBuf[16];
+            std::snprintf(elBuf, sizeof(elBuf), "%d:%02d", elSec / 60, elSec % 60);
+            std::snprintf(remBuf, sizeof(remBuf), "-%d:%02d", remSec / 60, remSec % 60);
+
+            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
+            const float px = 23.f * sy;
+            const float track = 0.6f * sx;
+            const float barX0 = offsetX + 200.f * sx;
+            const float barX1 = offsetX + 440.f * sx;
+            const float barCy = offsetY + 408.f * sy;
+            const float barH = 12.f * sy;
+            const float barY0 = barCy - barH * 0.5f;
+            const float barY1 = barCy + barH * 0.5f;
+            const float gap = 14.f * sx;
+
+            fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(barX1, barY1), IM_COL32(115, 118, 124, 215));
+            const float frac = (totalSec > 0.0) ? float(std::clamp(el / totalSec, 0.0, 1.0)) : 0.f;
+            if (frac > 0.f) {
+                const float fillX1 = barX0 + (barX1 - barX0) * frac;
+                fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(fillX1, barY1), IM_COL32(255, 255, 255, 255));
+            }
+
+            // Lock elapsed & remaining timestamps to the exact vertical center of the bar using the
+            // actual glyph bounds of '0' on the active font, so bar and text can never drift apart.
+            const ImFontGlyph* g0 = fnt ? fnt->FindGlyph('0') : nullptr;
+            const float digitCenter = (g0 && fnt->FontSize > 0.f)
+                ? ((g0->Y0 + g0->Y1) * 0.5f) * (px / fnt->FontSize)
+                : px * 0.46f;
+            const float textY = barCy - digitCenter;
+            const float elW = textWidth(fnt, px, elBuf, track);
+            drawGameShadowText(px, ImVec2(barX0 - gap - elW, textY), IM_COL32(255, 255, 255, 255), elBuf, track, 1.f);
+            drawGameShadowText(px, ImVec2(barX1 + gap, textY), IM_COL32(255, 255, 255, 255), remBuf, track, 1.f);
+        };
+        const MovieOverlay mv = movieOverlay();
+        if (mv.active && mv.totalSec > 0.0) {
             const double actionAge = mv.lastActionTb ? double(now - mv.lastActionTb) / double(kTbClock) : 99.0;
             const bool showBar = mv.paused || actionAge < 2.0;
             if (showBar) {
-                const float barA = 1.f;
-
-                const float barX0 = offsetX + 200.f * sx;
-                const float barX1 = offsetX + 440.f * sx;
-                const float barCy = offsetY + (418.f - 18.f - 12.5f) * sy;
-                const float barH = 12.f * sy;
-                const float barY0 = barCy - barH * 0.5f;
-                const float barY1 = barCy + barH * 0.5f;
-
-                fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(barX1, barY1), IM_COL32(115, 118, 124, int(215 * barA)));
-                const float frac = float(std::clamp(mv.curSec / mv.totalSec, 0.0, 1.0));
-                if (frac > 0.f) {
-                    const float fillX1 = barX0 + (barX1 - barX0) * frac;
-                    fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(fillX1, barY1), IM_COL32(255, 255, 255, int(255 * barA)));
-                }
+                drawPlaybackBar(mv.curSec, mv.totalSec);
             }
 
             if (mv.paused && !s_open) {
+                float offsetX = 0.f, offsetY = 0.f, sx = 1.f, sy = 1.f;
+                calcGameUiBox(offsetX, offsetY, sx, sy);
                 // Invisible mouse hitboxes matching the native in-game font "CONTINUE" (y=230) and "BACK" (y=264) slots
                 const float rowYs[2] = {230.f - 18.f, 264.f - 18.f};
                 const ImVec2 mpos = io.MousePos;
@@ -3308,12 +3340,6 @@ void menuDraw() {
                 }
             }
         }
-        auto drawGameShadowText = [&](float px, ImVec2 pos, ImU32 col, const char* txt, float sp, float a) {
-            ImFont* fnt = s_fontGame ? s_fontGame : s_font;
-            const float sh = std::max(2.f, px * 0.08f);
-            drawText(fg, fnt, px, ImVec2(pos.x + sh, pos.y + sh), IM_COL32(0, 0, 0, int(215 * a)), txt, sp);
-            drawText(fg, fnt, px, pos, col, txt, sp);
-        };
 
         // Cutscene hold-B-to-skip indicator (true bottom-right corner, game menu font & Music Hall list size)
         const CutsceneSkipOverlay sk = cutsceneSkipOverlay();
@@ -3386,29 +3412,10 @@ void menuDraw() {
             drawGameShadowText(px1, ImVec2(cx - w1 * 0.5f, y0), col1, line1, track1, 1.f);
             drawGameShadowText(px2, ImVec2(cx - w2 * 0.5f, y0 + px1 + 4.f * ui), col2, line2, track2, 1.f);
         }
-        // Music Hall playback progress bar (aligned in 4:3 game space directly between the native time labels)
+        // Music Hall playback progress bar + timestamps (locked together in ImGui)
         const MusicHallOverlay mh = musicHallOverlay();
         if (mh.active) {
-            const double total = mh.totalSec;
-            const double elapsed = (total > 0.0) ? std::clamp(mh.elapsedSec, 0.0, total) : std::max(0.0, mh.elapsedSec);
-            float offsetX = 0.f, offsetY = 0.f, sx = 1.f, sy = 1.f;
-            calcGameUiBox(offsetX, offsetY, sx, sy);
-
-            // Bar sits centered between elapsed (x=165) and remaining (x=475),
-            // vertically centered on the y=418 native text row (minus 18-line EFB crop offset).
-            const float barX0 = offsetX + 200.f * sx;
-            const float barX1 = offsetX + 440.f * sx;
-            const float barCy = offsetY + (418.f - 18.f - 12.5f) * sy;
-            const float barH = 12.f * sy;
-            const float barY0 = barCy - barH * 0.5f;
-            const float barY1 = barCy + barH * 0.5f;
-
-            fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(barX1, barY1), IM_COL32(115, 118, 124, 215));
-            const float frac = (total > 0.0) ? float(elapsed / total) : 0.f;
-            if (frac > 0.f) {
-                const float fillX1 = barX0 + (barX1 - barX0) * std::clamp(frac, 0.f, 1.f);
-                fg->AddRectFilled(ImVec2(barX0, barY0), ImVec2(fillX1, barY1), IM_COL32(255, 255, 255, 255));
-            }
+            drawPlaybackBar(mh.elapsedSec, mh.totalSec);
         }
     }
     // save state messages: 2.5 s at the top, fading out

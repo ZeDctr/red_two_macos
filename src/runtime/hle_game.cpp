@@ -154,14 +154,16 @@ static void movieUpdateNativeUi(Ctx& c, u32 menuObj, bool paused, int pauseSel, 
     if (menuObj < 0x7FC00000u || menuObj >= 0x81800000u) return;
     static u32 s_initMenuObj = 0;
     static u8 s_initPage = 0xFFu;
-    static int s_lastEl = -1, s_lastRem = -1, s_lastSel = -1;
-    static bool s_lastPaused = false, s_lastBar = false;
+    static int s_lastSel = -1;
+    static bool s_lastPaused = false;
 
     const u8 page = rd8(menuObj + 0x3Eu);
     const u32 slotBase = rd32(menuObj + 0x3B80u);
     if (slotBase < 0x7FC00000u) return;
     s_movieMenuObj = menuObj;
     s_movieShowBar = showBar;
+    (void)curSec;
+    (void)totalSec;
 
     const u32 savedR3 = c.r[3];
     const double savedF1 = c.f[1];
@@ -174,22 +176,17 @@ static void movieUpdateNativeUi(Ctx& c, u32 menuObj, bool paused, int pauseSel, 
     static constexpr u32 kMvPauseAddr = 0x8F000400u;
     static constexpr u32 kMvContAddr  = 0x8F000410u;
     static constexpr u32 kMvBackAddr  = 0x8F000428u;
-    static constexpr u32 kMvElAddr    = 0x8F000440u;
-    static constexpr u32 kMvRemAddr   = 0x8F000458u;
 
-    const bool needInit = (s_initMenuObj != menuObj || s_initPage != page || rd8(menuObj + 0x3BA4u) < 15u);
+    const bool needInit = (s_initMenuObj != menuObj || s_initPage != page || rd8(menuObj + 0x3BA4u) < 13u);
     if (needInit) {
         s_initMenuObj = menuObj;
         s_initPage = page;
-        s_lastEl = s_lastRem = s_lastSel = -1;
+        s_lastSel = -1;
         s_lastPaused = !paused;
-        s_lastBar = !showBar;
 
         writeStr(kMvPauseAddr, "PAUSED");
         writeStr(kMvContAddr, "CONTINUE");
         writeStr(kMvBackAddr, "BACK");
-        writeStr(kMvElAddr, "0:00");
-        writeStr(kMvRemAddr, "-0:00");
 
         c.r[3] = 0x7FDE3428u;
         f_7FD58DD8(c);
@@ -235,12 +232,10 @@ static void movieUpdateNativeUi(Ctx& c, u32 menuObj, bool paused, int pauseSel, 
         initSlot(10u, 320.0, 178.0, 0.85, kMvPauseAddr, 0xFFu, 0xE0u, 0x60u);
         initSlot(11u, 320.0, 230.0, 0.62, kMvContAddr,  0xFFu, 0xFFu, 0xFFu);
         initSlot(12u, 320.0, 264.0, 0.62, kMvBackAddr,  0xFFu, 0xFFu, 0xFFu);
-        initSlot(13u, 165.0, 418.0, 0.50, kMvElAddr,    0xFFu, 0xFFu, 0xFFu);
-        initSlot(14u, 468.0, 418.0, 0.50, kMvRemAddr,   0xFFu, 0xFFu, 0xFFu);
 
-        if (rd8(menuObj + 0x3BA4u) < 15u) {
-            wr8(menuObj + 0x3BA4u, 15u);
-            wr8(menuObj + 0x3BA5u + page, 15u);
+        if (rd8(menuObj + 0x3BA4u) < 13u) {
+            wr8(menuObj + 0x3BA4u, 13u);
+            wr8(menuObj + 0x3BA5u + page, 13u);
         }
     }
 
@@ -273,38 +268,6 @@ static void movieUpdateNativeUi(Ctx& c, u32 menuObj, bool paused, int pauseSel, 
             f_7FD3EA00(c);
         }
         s_lastSel = pauseSel;
-    }
-    if (showBar != s_lastBar) {
-        s_lastBar = showBar;
-        for (u32 idx = 13u; idx <= 14u; idx++) {
-            c.r[3] = slotBase + idx * 108u;
-            c.r[4] = showBar ? 1u : 0u;
-            f_7FD3E9B8(c);
-        }
-    }
-    if (showBar) {
-        const double el = (totalSec > 0.0) ? std::clamp(curSec, 0.0, totalSec) : std::max(0.0, curSec);
-        const double rem = (totalSec > 0.0) ? std::max(0.0, totalSec - el) : 0.0;
-        const int elSec = int(el + 0.5);
-        const int remSec = int(rem + 0.5);
-        if (elSec != s_lastEl) {
-            s_lastEl = elSec;
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d:%02d", elSec / 60, elSec % 60);
-            writeStr(kMvElAddr, buf);
-            c.r[3] = slotBase + 13u * 108u;
-            c.r[4] = kMvElAddr;
-            f_7FD3E418(c);
-        }
-        if (remSec != s_lastRem) {
-            s_lastRem = remSec;
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "-%d:%02d", remSec / 60, remSec % 60);
-            writeStr(kMvRemAddr, buf);
-            c.r[3] = slotBase + 14u * 108u;
-            c.r[4] = kMvRemAddr;
-            f_7FD3E418(c);
-        }
     }
     c.r[3] = savedR3;
     c.f[1] = savedF1;
@@ -547,7 +510,7 @@ void hle_MovieEndDraw(Ctx& c) {
     const u32 callerLr = c.lr;
     f_7FD839A0_orig(c);
     if (callerLr != 0x7FD712A4u) return;
-    if (!s_moviePaused && !s_movieShowBar) return;
+    if (!s_moviePaused) return;
     const u32 menuObj = s_movieMenuObj;
     if (menuObj < 0x7FC00000u || menuObj >= 0x81800000u) return;
     if (rd32(0x80096200u) == 0 || rd32(0x80096220u) == 0) return;
@@ -916,10 +879,6 @@ constexpr u32 kMusicHallTableAddr = 0x80060C38u;  // 16-byte entries: +0 h78, +2
 int s_musicHallPage = 0;
 int s_musicHallItemCount = 0;
 int s_musicHallTitleSlot = -1;
-int s_musicHallElapsedSlot = -1;
-int s_musicHallRemainSlot = -1;
-int s_musicHallLastShownEl = -1;
-int s_musicHallLastShownRem = -1;
 int s_musicHallPlaying = -1;
 int s_musicHallPending = -1;
 bool s_musicHallAudioInit = false;
@@ -1188,48 +1147,6 @@ void musicHallPopulatePage(Ctx& c, u32 menuObj, int page, int initSel) {
         f_7FD3EA00(c);
     }
 
-    // 5) Elapsed & remaining time labels in native menu font directly below the track title
-    static constexpr u32 kElapsedStrAddr = 0x8F000300u;
-    static constexpr u32 kRemainStrAddr = 0x8F000320u;
-    writeGuestAscii(kElapsedStrAddr, "0:00");
-    writeGuestAscii(kRemainStrAddr, "-0:00");
-    {
-        s_musicHallElapsedSlot = int(rd8(menuObj + 0x3BA4u));
-        const u32 slot = addSlot(165.0, 418.0, 0.50, 2u);  // centered left of bar
-        c.r[3] = slot;
-        c.r[4] = kElapsedStrAddr;
-        f_7FD3E418(c);
-        c.r[3] = slot;
-        c.r[4] = 0u;
-        c.r[5] = 0xFFu;
-        c.r[6] = 0xFFu;
-        c.r[7] = 0xFFu;
-        c.r[8] = 0xFFu;
-        f_7FD3EA00(c);
-        c.r[3] = slot;
-        c.r[4] = (s_musicHallPlaying >= 0) ? 1u : 0u;
-        f_7FD3E9B8(c);
-    }
-    {
-        s_musicHallRemainSlot = int(rd8(menuObj + 0x3BA4u));
-        const u32 slot = addSlot(468.0, 418.0, 0.50, 2u);  // centered right of bar
-        c.r[3] = slot;
-        c.r[4] = kRemainStrAddr;
-        f_7FD3E418(c);
-        c.r[3] = slot;
-        c.r[4] = 0u;
-        c.r[5] = 0xFFu;
-        c.r[6] = 0xFFu;
-        c.r[7] = 0xFFu;
-        c.r[8] = 0xFFu;
-        f_7FD3EA00(c);
-        c.r[3] = slot;
-        c.r[4] = (s_musicHallPlaying >= 0) ? 1u : 0u;
-        f_7FD3E9B8(c);
-    }
-    s_musicHallLastShownEl = -1;
-    s_musicHallLastShownRem = -1;
-
     // Sync per-page slot count so f_7FD6B144 renders all slots
     wr8(menuObj + 0x3BA5u + rd8(menuObj + 0x3Eu), rd8(menuObj + 0x3BA4u));
 
@@ -1438,41 +1355,9 @@ void hle_MusicHallUpdate(Ctx& c) {
         if (total > 0.0) {
             elapsed = loops ? std::fmod(elapsed, total) : std::clamp(elapsed, 0.0, total);
         }
-        const double rem = (total > 0.0) ? std::max(0.0, total - elapsed) : 0.0;
         s_musicHallOverlayElapsed.store(elapsed, std::memory_order_relaxed);
         s_musicHallOverlayTotal.store(total > 0.0 ? total : 0.0, std::memory_order_relaxed);
         s_musicHallOverlayActive.store(true, std::memory_order_relaxed);
-
-        const int elSec = int(elapsed + 0.5);
-        const int remSec = int(rem + 0.5);
-        if (elSec != s_musicHallLastShownEl && s_musicHallElapsedSlot >= 0) {
-            s_musicHallLastShownEl = elSec;
-            static constexpr u32 kElapsedStrAddr = 0x8F000300u;
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d:%02d", elSec / 60, elSec % 60);
-            writeGuestAscii(kElapsedStrAddr, buf);
-            const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_musicHallElapsedSlot) * 108u;
-            c.r[3] = slot;
-            c.r[4] = kElapsedStrAddr;
-            f_7FD3E418(c);
-            c.r[3] = slot;
-            c.r[4] = 1u;
-            f_7FD3E9B8(c);
-        }
-        if (remSec != s_musicHallLastShownRem && s_musicHallRemainSlot >= 0) {
-            s_musicHallLastShownRem = remSec;
-            static constexpr u32 kRemainStrAddr = 0x8F000320u;
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "-%d:%02d", remSec / 60, remSec % 60);
-            writeGuestAscii(kRemainStrAddr, buf);
-            const u32 slot = rd32(menuObj + 0x3B80u) + u32(s_musicHallRemainSlot) * 108u;
-            c.r[3] = slot;
-            c.r[4] = kRemainStrAddr;
-            f_7FD3E418(c);
-            c.r[3] = slot;
-            c.r[4] = 1u;
-            f_7FD3E9B8(c);
-        }
     }
 
     const u8 btn = rd8(menuObj + 0x6699u);
