@@ -3250,7 +3250,7 @@ void menuDraw() {
 #ifdef __APPLE__
                 const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
 #else
-                const float barCy = offsetY + (418.f - 18.f - 15.f) * sy;
+                const float barCy = offsetY + (418.f - 18.f - 10.f) * sy;
 #endif
                 const float barH = 12.f * sy;
                 const float barY0 = barCy - barH * 0.5f;
@@ -3382,7 +3382,7 @@ void menuDraw() {
 #ifdef __APPLE__
             const float barCy = offsetY + (418.f - 18.f - 5.f) * sy;
 #else
-            const float barCy = offsetY + (418.f - 18.f - 15.f) * sy;
+            const float barCy = offsetY + (418.f - 18.f - 10.f) * sy;
 #endif
             const float barH = 12.f * sy;
             const float barY0 = barCy - barH * 0.5f;
