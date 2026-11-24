@@ -10,7 +10,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively on 
 
 ## Quick Start
 
-1. Download `RedTwo-macOS-Plus-v1.3.2-arm64.zip` (macOS Apple Silicon) or `RedTwo-Windows-Plus-v1.3.2-x64.zip` (Windows x64) from the [Releases](../../releases) page and unzip it.
+1. Download `RedTwo-macOS-Plus-v1.3.2-arm64.zip` (macOS Apple Silicon) or `RedTwo-Windows-Plus-v1.3.2-x64.zip` (Windows x64, experimental) from the [Releases](../../releases) page and unzip it.
 2. **First launch (macOS Gatekeeper)**: because the app is ad-hoc signed and not notarized by Apple, macOS will block it on first launch (or say it is "damaged"). Clear the quarantine flag once in Terminal:
    ```bash
    xattr -cr "/path/to/Red Two.app"
