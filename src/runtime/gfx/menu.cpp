@@ -3073,6 +3073,11 @@ static float s_appliedAspect = 0.f;
 static float displayAspect() {
     // Fullscreen videos (documentary, teaser, film clips) keep their original 4:3 aspect ratio
     if (movieFullscreenActive()) return 4.f / 3.f;
+    // Letterboxed cinematics & credits (304 lines = 2.105:1 cinema frame): present at their exact
+    // native 2.105:1 aspect with letterboxFill so the original 4:3-width framing fills 16:9/16:10
+    // edge-to-edge with authentic cinema bars top/bottom and zero off-screen side pop-in.
+    const u32 lines = viXfbLines();
+    if (lines > 0 && lines < 400) return (4.f / 3.f) * (480.f / float(lines));
     const float a = settings::aspectValue(settings::get().aspect);
     if (a > 0.f) return std::min(a, settings::kMaxAspect);
     int w = 0, h = 0;
@@ -3089,11 +3094,9 @@ static void applyDisplayAspect() {
 
 static int s_appliedLetterboxFill = -1;
 static void applyLetterboxFill() {
-    // Always preserve cinema letterbox bars in cutscenes & credits (304 lines) across all aspect
-    // ratios so the vertical framing stays authentic; still stretch the tiny 450->480 margin in gameplay.
     const u32 lines = viXfbLines();
     const bool cinematic = lines > 0 && lines < 400;
-    const bool fill = !cinematic && settings::get().aspect != settings::Aspect::R4_3;
+    const bool fill = cinematic || settings::get().aspect != settings::Aspect::R4_3;
     if (int(fill) == s_appliedLetterboxFill) return;
     s_appliedLetterboxFill = int(fill);
     AuroraSetLetterboxFill(fill);
