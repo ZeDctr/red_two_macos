@@ -103,8 +103,9 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   Left Shift = B, E = X, Q = Y, R = Z, 1/2 = L/R, Enter = Start, IJKL = C-stick, TFGH = D-pad.
 - The game's button prompts show your controller's buttons (the one each GameCube button is
   bound to, e.g. "PRESS (Y)" and SELECT CRAFT's "(B) > pilot"): the PlayStation symbols on a
-  PS3 / PS4 / PS5 controller, the Xbox buttons on any other. F1 > Controls > Button prompts
-  picks Automatic, Xbox, PlayStation or the original GameCube ones. The C-stick icon stays.
+  PS3 / PS4 / PS5 controller, the Switch letters on a Switch Pro Controller or Joy-Cons, the Xbox
+  buttons on any other, and SELECT CRAFT's C-stick becomes the right stick. F1 > Controls >
+  Button prompts picks Automatic, Xbox, PlayStation, Switch or the original GameCube ones.
 - **Sticks** (F1 > Controls): the control stick and the C-stick each have a sensitivity (25-200%)
   and a round deadzone (0-50%; the output grows from zero at its edge), and the stick's whole
   travel past the deadzone is the game's range. **Response** sets how the craft's turning follows
@@ -125,11 +126,20 @@ choose Open Anyway in System Settings > Privacy & Security (or run
 - **Graphics** (F1, DISPLAY): internal resolution up to 4K, 4x MSAA anti-aliasing (from the next
   start; WebGPU offers no other sample count) and anisotropic filtering up to 16x. **Widescreen**
   (16:9, 16:10, 21:9 or the window's shape) widens the 3D view, puts the flight HUD at the screen
-  edges and fills the screen in cutscenes; wider windows get bars at the sides. **Frame rate**: 60,
+  edges and fills the screen in cutscenes (**Cinematic bars** keeps them in their 2.1:1 cinema
+  frame with black bars instead); wider windows get bars at the sides. **Frame rate**: 60,
   90, 120 or 144 frames a second, the game at its normal speed. **V-Sync** (off by default) shows
   each frame in step with the display's refresh: no tearing, a little more input lag. With it on, a
   frame rate at or above the display's refresh runs at the refresh (144 on a 120 Hz display: 120),
   and cutscene skips still run at full speed.
+- **Cutscenes** (F1, GAMEPLAY): with Skippable cutscenes on, hold B for 2 seconds in the opening
+  crawl or a cutscene to skip it (a ring in the corner fills while you hold); holding B also skips
+  the intro at start. Skip intro logos reaches the title in about 10 seconds by itself.
+- **Special Features**: the documentary and the teaser play at their own speed at any frame rate;
+  left / right jumps 5 seconds, and A, B or START pauses them (CONTINUE / BACK). While the audio
+  commentary plays in a mission, L3 (keyboard C; F1 > Controls > Hotkeys) pauses it.
+- **The mouse** works in the game's own menus: point at an item to select it, click for A, right
+  click for B, and the wheel moves up and down (also on the pause screen and in the art gallery).
 - **Loading**: Fast loading (Gameplay, on) reads the disc at SSD speed instead of the GameCube
   drive's 3 MB/s. The disc image is read ahead of the game on a thread of its own, so it can sit on
   a hard disk or a network drive without the game stuttering while it streams music and voices.
@@ -157,7 +167,8 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   opens the menu. States live in the user folder's `states` and also load after a restart, but
   only into the same build of Red Two (a rebuild makes them "OLD"). The memory card is not part
   of a state: loading one does not undo the game's own saves.
-- Saves go to the user folder's `saves/GSWE64_A.raw` (slot A; the game formats a new card). A
+- Saves go to the user folder's `saves/GSWE64_A.raw` (slot A; a new card comes formatted and the
+  game makes its save at the first start without asking). A
   `.raw` card from Dolphin or Nintendont can be copied there as it is, whatever its size (59 to
   2043 blocks). `R2_CARD_A=<path>` uses another card image.
 - **Mods** (F1, MODS tab): texture packs in Dolphin's format go in the user folder's
@@ -245,6 +256,13 @@ host fibers, the GameCube's hardware at the register level (video, disc, audio D
 card, controllers), and a bridge that hands the GPU command stream to
 [Aurora](https://github.com/encounter/aurora) for rendering. Names we gave the game's functions are
 in `config/GSWE64/symbols.txt`.
+
+## Credits
+
+Some features come from ZeDctr's [Red Two Plus](https://github.com/ZeDctr/red_two_plus) fork:
+hold-to-skip cutscenes, the documentary's speed fix, seeking and pause menu, Switch button
+prompts, the memory card's first save, pausing the audio commentary, the mouse in the game's menus,
+cinematic bars and faster audio catch-up. Rendering is [Aurora](https://github.com/encounter/aurora)'s.
 
 ## Legal
 

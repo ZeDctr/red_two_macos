@@ -232,6 +232,7 @@ void followActiveController() {  // JoystickAccess held
 }
 
 bool s_port1PlayStation = false;  // port 1's controller is a PlayStation one (button prompts)
+bool s_port1Switch = false;       // ... a Nintendo Switch one
 
 // the session log says which controller port 1 has whenever that changes (automatic or taken over)
 void logPort1() {  // JoystickAccess held
@@ -242,6 +243,7 @@ void logPort1() {  // JoystickAccess held
     SDL_Gamepad* g = src ? SDL_GetGamepadFromID(aurora::input::gamepad_for_source(src)) : nullptr;
     const SDL_GamepadType type = g ? SDL_GetGamepadType(g) : SDL_GAMEPAD_TYPE_UNKNOWN;
     s_port1PlayStation = isPlayStation(type);
+    s_port1Switch = isNintendoSwitch(type);
     const char* typeName = SDL_GetGamepadStringForType(type);
     if (g)
         logf("input", "port 1 controller: '%s' (vid %04x, pid %04x, type %s)", SDL_GetGamepadName(g), SDL_GetGamepadVendor(g),
@@ -616,6 +618,11 @@ bool isPlayStation(int sdlGamepadType) {
            sdlGamepadType == SDL_GAMEPAD_TYPE_PS5;
 }
 bool port1PlayStation() { return s_port1PlayStation; }
+bool isNintendoSwitch(int t) {
+    return t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+           t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR;
+}
+bool port1NintendoSwitch() { return s_port1Switch; }
 
 JoystickAccess::JoystickAccess() : m_held(s_joyMutex.try_lock()) {}
 JoystickAccess::~JoystickAccess() {

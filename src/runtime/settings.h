@@ -21,10 +21,11 @@ enum class GyroMode : int { Off = 0, Always, Held, Toggle, Paused, Count };
 inline constexpr float kMaxAspect = 64.f / 27.f;
 
 // The game's button prompts (gfx/button_icons.cpp): Auto shows PlayStation symbols while port 1's
-// controller is a PlayStation one and Xbox buttons otherwise; Xbox / PlayStation always those;
-// GameCube the game's own. settings.ini: button_prompts=auto|xbox|playstation|gamecube (the
-// older xbox_buttons=1/0 reads as auto / gamecube).
-enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, GameCube, Count };
+// controller is a PlayStation one, Switch letters with a Switch one and Xbox buttons otherwise;
+// Xbox / PlayStation / Switch always those; GameCube the game's own. settings.ini:
+// button_prompts=auto|xbox|playstation|switch|gamecube (the older xbox_buttons=1/0 reads as auto /
+// gamecube).
+enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, Switch, GameCube, Count };
 
 // How the craft's turn and pitch rate follow the control stick (input.cpp mainStickToGame):
 // Smooth grows with the deflection to the power 1.5, Linear in proportion, GameCube is the game's
@@ -56,6 +57,7 @@ struct Settings {
     Aspect aspect = Aspect::R4_3;
     bool hudEdges = true;  // widescreen: the flight HUD at the screen edges
     bool tileMenus = true;  // widescreen: menu backgrounds continue into the sides
+    bool cinemaBars = false;  // widescreen: letterboxed cinematics keep their 2.1:1 frame with bars (gfx/menu.cpp)
     // The game's own dither: a screen-space texture blended over every frame, sized for 640x480;
     // above that it shows as a coarse grid (the Hoth sky). Off like Dolphin's "Disable Dithering" code.
     bool gameDither = false;
@@ -139,12 +141,14 @@ struct Settings {
     // combination held together: controller buttons by SDL name, keys by SDL key name, " + "
     // between them; empty = none
     int stateSlot = 1;
-    std::string hotkeyPad[5] = {"back + rightshoulder", "back + leftshoulder", "back + dpright", "back + dpleft", "back + dpup"};
-    std::string hotkeyKeys[5] = {"F5", "F8", "F7", "F6", "F9"};
+    std::string hotkeyPad[6] = {"back + rightshoulder", "back + leftshoulder", "back + dpright", "back + dpleft", "back + dpup",
+                                "leftstick"};
+    std::string hotkeyKeys[6] = {"F5", "F8", "F7", "F6", "F9", "C"};
 };
 // hotkey actions (the index into hotkeyPad / hotkeyKeys)
-// (HkToggleTextures: texture packs hidden / shown at once, mods.cpp toggleTexturesShown)
-enum HotkeyAction : int { HkSaveState = 0, HkLoadState, HkNextSlot, HkPrevSlot, HkToggleTextures, HkCount };
+// (HkToggleTextures: texture packs hidden / shown at once, mods.cpp toggleTexturesShown;
+// HkCommentary: the audio commentary paused / resumed, hle_game.cpp)
+enum HotkeyAction : int { HkSaveState = 0, HkLoadState, HkNextSlot, HkPrevSlot, HkToggleTextures, HkCommentary, HkCount };
 const char* hotkeyDefault(int action, bool pad);
 
 Settings& get();
