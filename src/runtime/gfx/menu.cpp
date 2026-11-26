@@ -214,8 +214,10 @@ bool padTest() {
     return on;
 }
 
-enum Section { Display, Gameplay, Audio, Controls, Cheats, Achievements, Mods, SectionCount };
-const char* const kSectionNames[SectionCount] = {"DISPLAY", "GAMEPLAY", "AUDIO", "CONTROLS", "CHEATS", "ACHIEVEMENTS", "MODS"};
+// GAME (start / reset, the disc, updates, Discord, quit) has its own tab since 2026-11-25 (issue #53;
+// it was the top of DISPLAY): R2_MENU_SECTION numbers moved up by one from DISPLAY on.
+enum Section { Game, Display, Gameplay, Audio, Controls, Cheats, Achievements, Mods, SectionCount };
+const char* const kSectionNames[SectionCount] = {"GAME", "DISPLAY", "GAMEPLAY", "AUDIO", "CONTROLS", "CHEATS", "ACHIEVEMENTS", "MODS"};
 int s_section = 0;
 int s_rowSel[SectionCount] = {};    // each page's selected row
 int s_rowCount[SectionCount] = {};  // the rows each page had when it was last drawn
@@ -1072,7 +1074,7 @@ void updatePoll() {
     }
 }
 
-void pageDisplay(settings::Settings& s) {
+void pageGame(settings::Settings& s) {
     if (discBrowserShown()) {
         pageBrowse(s);
         return;
@@ -1147,6 +1149,9 @@ void pageDisplay(settings::Settings& s) {
         logf("menu", "quit to desktop");
         quitToDesktop();
     }
+}
+
+void pageDisplay(settings::Settings& s) {
     heading("SCREEN");
     if (toggleRow("Fullscreen", s.fullscreen, "Also F11 or Alt+Enter.")) s_changed = s_display = true;
     if (enumRow("Internal resolution", s.resolution, settings::resolutionName,
@@ -1400,6 +1405,27 @@ void pageAchievements(settings::Settings& s) {
                 s_raPassword.clear();
             }
         }
+#ifndef __ANDROID__
+        {
+            // ra_web_login.cpp: the same login, typed on a page in the browser (a real keyboard,
+            // the browser's password manager)
+            const bool web = ra::webLoginRunning();
+            if (buttonRow("Log in in your browser", web ? "OPEN THE PAGE AGAIN" : "OPEN BROWSER",
+                          web ? "Waiting for you to sign in on the page Red Two opened in your browser (it stays open "
+                                "for 10 minutes). This button opens it again."
+                              : "Opens a sign-in page in your web browser: type your retroachievements.org name and "
+                                "password there instead of here. The page comes from Red Two on this computer; Red Two "
+                                "keeps only the login token. (On a Steam Deck in Game Mode, log in above instead.)")) {
+                std::string url, err;
+                if (ra::webLoginStart(url, err)) {
+                    openUrl(url);
+                    s_raNote = "Sign in on the page in your browser.";
+                } else {
+                    s_raNote = err;
+                }
+            }
+        }
+#endif
         if (s_raDolphin < 0) s_raDolphin = ra::dolphinLoginAvailable() ? 1 : 0;
         if (s_raDolphin == 1 && buttonRow("Dolphin's login", "IMPORT",
                                           "Dolphin is logged in to RetroAchievements on this computer: use the same "
@@ -1408,6 +1434,7 @@ void pageAchievements(settings::Settings& s) {
             s_changed = false;  // (saved by the import)
         }
     } else {
+        s_raNote.clear();  // (logged in: the Account row says it)
         char b[160];
         snprintf(b, sizeof b, "%s  (%u points)", st.user.c_str(), st.score);
         infoRow("Account", b, "The retroachievements.org account unlocks go to (softcore points).");
@@ -1547,10 +1574,10 @@ struct BrowseEntry {
     bool file = false, ok = false;
     std::string help;
 };
-// what the browser picks: a texture pack folder (MODS) or the game disc image (DISPLAY's disc page)
+// what the browser picks: a texture pack folder (MODS) or the game disc image (GAME's disc page)
 enum class BrowseMode { Textures, Disc };
 BrowseMode s_browseMode = BrowseMode::Textures;
-int s_browseSection = 0;                 // the page it is shown on (Mods / Display)
+int s_browseSection = 0;                 // the page it is shown on (Mods / Game)
 bool s_browsing = false;
 std::string s_browseDir;                 // the folder shown
 std::string s_browseParent;              // its parent ("" at a root)
@@ -1745,7 +1772,7 @@ void browseChoose(settings::Settings& s) {
     logf("menu", "texture folder chosen: %s (%zu textures)", s.texturesFolder.c_str(), n);
 }
 
-// --- the game disc (DISPLAY: the launcher's first page) ------------------------------------
+// --- the game disc (GAME: the launcher's first page) ---------------------------------------
 // The disc image the game boots from: --disc, else the one chosen here before (setting
 // disc_path), else one found next to the program or in the user folder (main.cpp). With none (or
 // one that is not Rogue Leader, USA, revision 0) the launcher opens on the disc page and the game
@@ -1758,7 +1785,7 @@ std::string s_discProblem;  // why s_discPath cannot be used ("" if it can)
 std::string s_discNote;     // why the launcher asks (main.cpp: a chosen disc that went away, ...)
 std::string s_discError;    // the last choice that was refused, and why
 std::string s_discEdit;     // the path row's text
-bool s_discPage = false;    // the disc page instead of DISPLAY's rows
+bool s_discPage = false;    // the disc page instead of GAME's rows
 bool s_discChanged = false; // chosen in game: for the next start
 int s_discReturnRow = 0;
 
@@ -1766,19 +1793,19 @@ bool discReady() { return !s_discPath.empty() && s_discProblem.empty(); }
 
 void discPageOpen() {
     if (s_discPage) return;
-    s_discReturnRow = s_rowSel[Display];
+    s_discReturnRow = s_rowSel[Game];
     s_discPage = true;
     s_discError.clear();
     s_discEdit = s_discPath;
-    s_rowSel[Display] = 0;
+    s_rowSel[Game] = 0;
     s_scrollToSel = true;
-    s_section = Display;
+    s_section = Game;
 }
 
 void discPageClose() {
     s_discPage = false;
-    s_browseLeft = true;  // (DISPLAY's own rows again next frame)
-    s_rowSel[Display] = s_discReturnRow;
+    s_browseLeft = true;  // (GAME's own rows again next frame)
+    s_rowSel[Game] = s_discReturnRow;
     s_scrollToSel = true;
 }
 
@@ -1805,7 +1832,7 @@ bool discChoose(const std::string& path) {
     settings::save();
     if (changed && !s_launcher) s_discChanged = true;
     logf("menu", "disc chosen: %s (%s)", p.c_str(), what.c_str());
-    if (s_launcher) s_rowSel[Display] = 0;  // (Start game, at the top of the disc page)
+    if (s_launcher) s_rowSel[Game] = 0;  // (Start game, at the top of the disc page)
     return true;
 }
 
@@ -1915,7 +1942,7 @@ void pageDisc() {
         discDialogOpen();
     if (buttonRow("Find it", "OPEN", "Look through your folders here, with the controller or the keyboard: Rogue Leader "
                                      "images are marked."))
-        browseBegin(BrowseMode::Disc, Display, s_discPath.empty() ? std::string() : u8str(u8path(s_discPath).parent_path()));
+        browseBegin(BrowseMode::Disc, Game, s_discPath.empty() ? std::string() : u8str(u8path(s_discPath).parent_path()));
     if ((!s_launcher || ready) &&
         buttonRow(s_launcher ? "Other settings" : "Back", "DONE", "Back to the rest of this page (B / Esc too)."))
         discPageClose();
@@ -2263,6 +2290,10 @@ void pageControls() {
                        "How far the control stick moves before anything happens (round, and the output grows from "
                        "zero at its edge). Raise it if the craft drifts with the stick let go.",
                        0, 50, 1))
+            s_changed = true;
+        if (toggleRow("Invert Y axis", st.invertY,
+                      "The game flies like a plane: stick up dives, stick down climbs. On: stick up climbs and down "
+                      "dives. Only while flying: menus keep up = up. (Gyro aiming has its own Invert setting.)"))
             s_changed = true;
         stickMeter(true);
     }
@@ -2634,6 +2665,7 @@ bool drawMenu(settings::Settings& s, float t) {
         s_changed = s_display = false;
         s_row = 0;
         switch (s_section) {
+        case Game: pageGame(s); break;
         case Display: pageDisplay(s); break;
         case Gameplay: pageGameplay(s); break;
         case Audio: pageAudio(s); break;
@@ -2685,7 +2717,7 @@ bool drawMenu(settings::Settings& s, float t) {
     return true;
 }
 
-// R2_MENU_BIND_TEST=1 (with R2_MENU=1 R2_MENU_SECTION=3, automated runs only: their bindings
+// R2_MENU_BIND_TEST=1 (with R2_MENU=1 R2_MENU_SECTION=4, automated runs only: their bindings
 // live in build/test_cache): rebinds A and STICK UP on the keyboard through synthetic key
 // presses, logs the results, then resets the keyboard profile.
 void pushKey(SDL_Scancode sc) {
@@ -2700,7 +2732,7 @@ void pushKey(SDL_Scancode sc) {
         SDL_PushEvent(&e);
     }
 }
-// R2_MENU_TEXT_TEST=1 (with R2_MENU=1 R2_MENU_SECTION=5 R2_MENU_ROW=1 and R2_INPUT set): types
+// R2_MENU_TEXT_TEST=1 (with R2_MENU=1 R2_MENU_SECTION=6 R2_MENU_ROW=1 and R2_INPUT set): types
 // into the achievements page's user name row through synthetic key and text events
 void pushText(const char* text) {
     SDL_Event e{};
@@ -2785,6 +2817,7 @@ void padSelfTest() {
         if (k == at) SDL_SetJoystickVirtualAxis(joy, a, v);
         if (k == at + 4) SDL_SetJoystickVirtualAxis(joy, a, 0);
     };
+    if (k == 0) switchSection(Display);  // (the steps below start on DISPLAY; GAME comes before it since 1.3.1h)
     k++;
     press(40, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // Display -> Gameplay
     press(60, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);   // -> Audio
@@ -2848,8 +2881,8 @@ bool launcherShowing() { return s_launcher; }
 void launcherOpen() {
     s_launcher = true;
     s_launch = false;
-    s_section = Display;
-    s_rowSel[Display] = 0;  // Start game: Enter / A right away
+    s_section = Game;
+    s_rowSel[Game] = 0;  // Start game: Enter / A right away
     s_usingPad = SDL_HasGamepad();  // (button hints; the first input decides after that)
     s_padDevice = s_usingPad && aurora::pad::port_controller(0) != 0;  // (the Controls page's device)
     setOpen(true);
@@ -2885,7 +2918,7 @@ bool launcherFrame() {
     if (browseEnv && !browseDone) {
         browseDone = true;
         discPageOpen();
-        browseBegin(BrowseMode::Disc, Display, browseEnv);
+        browseBegin(BrowseMode::Disc, Game, browseEnv);
     }
     if (autoEnv && double(tbNow() - openedTb) / double(kTbClock) >= atof(autoEnv)) {
         logf("menu", "launcher: R2_LAUNCHER_AUTO start");

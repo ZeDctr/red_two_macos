@@ -202,6 +202,7 @@ set(R2_RUNTIME_SOURCES
     src/runtime/savestate.cpp
     src/runtime/hotkeys.cpp
     src/runtime/achievements.cpp
+    src/runtime/ra_web_login.cpp
     src/runtime/http.cpp
     src/runtime/update.cpp
     src/runtime/discord.cpp)
@@ -250,7 +251,7 @@ target_compile_options(red_two PRIVATE ${_r2_arch} ${_r2_fp})
 target_link_libraries(red_two PRIVATE r2game aurora::core aurora::gx aurora::vi aurora::pad xxHash::xxhash zstd::libzstd
     rcheevos PNG::PNG nlohmann_json::nlohmann_json)
 if(WIN32)
-    target_link_libraries(red_two PRIVATE winmm dbghelp winhttp ZLIB::ZLIB)
+    target_link_libraries(red_two PRIVATE winmm dbghelp winhttp ws2_32 ZLIB::ZLIB)
 elseif(ANDROID)
     # Android: position-independent (save states then load only within a session: the system
     # puts the library anywhere), no stack protector (as the generated code), segments aligned

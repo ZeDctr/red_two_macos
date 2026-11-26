@@ -126,6 +126,7 @@ struct Settings {
     // The triggers' clicks (full boost / full brake) on LB / RB, the triggers analog only, Z from
     // RB to the right stick click (input.cpp placeClicks: the controllers' bindings)
     bool bumperClicks = false;
+    bool invertY = false;  // in flight: stick up climbs (issue #59)
     int stickSensitivity = 100;  // 25..200
     StickCurve stickCurve = StickCurve::GameCube;  // the game's own response (the user's call, 2026-11-25)
     // Gyro aiming (gyro.cpp): turning and tilting the controller (the Steam Deck itself, a

@@ -161,7 +161,8 @@ u32 viXfbLines();          // lines the VI scans out (304 for letterboxed cinema
 void setAudioSpeed(double speed, bool mute);  // hw.cpp: AI (audio) clock speed-up, output muted
 void setDvdBoost(double boost);               // hw.cpp: disc reads that much faster
 bool cinematicSkip();                         // hle_game.cpp: a cinematic (or the boot screen) is being skipped
-bool skipShown();                             // hle_game.cpp: ... by a skip the player chose ("SKIPPING" shown)
+bool skipShown();
+bool playerFlying();                          // hle_game.cpp: the player's craft is flying (not paused / a cutscene / the menus)                             // hle_game.cpp: ... by a skip the player chose ("SKIPPING" shown)
 std::string aiClockText();  // hw.cpp: perf lines - how late audio blocks came, blocks skipped (since the last call)
 bool aiCatchUpPending();  // hw.cpp: an audio (AI) block is due and MusyX may take it (threads.cpp safepoint)
 bool aiCatchUpStep();     // hw.cpp: start that block now if MusyX is ready for it
