@@ -27,6 +27,11 @@ hle     salBuildCommandList
 
 # Port options (src/runtime/hle_game.cpp): frame delta at retrace rates above 59.94 Hz
 hle     GameFrameDelta
+# The documentary / teaser player: its real frame time above 60 fps, seeking and a pause menu
+hle     MovieUpdate
+hle     MovieEndDraw
+# Memory card: the game's own automatic creation of its save file on slot A (no prompt at first start)
+hle     CardCheckSlot
 # Cheats (settings): infinite lives, invincibility (the player's craft is never destroyed)
 hle     LoseLife
 hle     CraftDestroy

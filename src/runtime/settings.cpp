@@ -17,7 +17,7 @@ namespace {
 
 Settings s_settings;
 std::string s_path;  // empty: do not persist (automated runs)
-const char* const kHotkeyNames[HkCount] = {"save_state", "load_state", "next_slot", "previous_slot", "toggle_textures"};
+const char* const kHotkeyNames[HkCount] = {"save_state", "load_state", "next_slot", "previous_slot", "toggle_textures", "commentary"};
 
 bool parseBool(const std::string& v) { return v == "1" || v == "true" || v == "on" || v == "yes"; }
 
@@ -69,6 +69,7 @@ void set(const std::string& key, const std::string& value) {
     else if (key == "precompile_shaders") s.precompileShaders = parseBool(value);
     else if (key == "hud_edges") s.hudEdges = parseBool(value);
     else if (key == "tile_menus") s.tileMenus = parseBool(value);
+    else if (key == "cinematic_bars") s.cinemaBars = parseBool(value);
     else if (key == "game_dither") s.gameDither = parseBool(value);
     else if (key == "vsync") s.vsync = parseBool(value);
     else if (key == "volume") s.volume = n < 0 ? 0 : n > 100 ? 100 : n;
@@ -203,12 +204,12 @@ std::string summary() {
     const Settings& s = s_settings;
     char b[4096];
     snprintf(b, sizeof b,
-             "disc_path=%s launcher=%d check_updates=%d discord_presence=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d vsync=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d game_dither=%d "
+             "disc_path=%s launcher=%d check_updates=%d discord_presence=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d vsync=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d cinematic_bars=%d game_dither=%d "
              "show_fps=%d volume=%d background_audio=%d speakers=%s skip_logos=%d skip_cutscenes=%d fast_disc=%d invincible=%d "
              "infinite_lives=%d infinite_ammo=%d perfect_stats=%d all_craft=%d custom_textures=%d prefetch_textures=%d "
              "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d stick_curve=%s cstick_deadzone=%d cstick_sensitivity=%d bumper_clicks=%d gyro=%s gyro_button=%s gyro_speed=%d/%d gyro_invert_y=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
              s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.checkUpdates, s.discordPresence, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.vsync, s.ubershaders, s.precompileShaders, s.hudEdges,
-             s.tileMenus, s.gameDither, s.showFps, s.volume, s.backgroundAudio, speakersName(s.speakers), s.skipLogos, s.skipCutscenes,
+             s.tileMenus, s.cinemaBars, s.gameDither, s.showFps, s.volume, s.backgroundAudio, speakersName(s.speakers), s.skipLogos, s.skipCutscenes,
              s.fastDisc, s.invincible, s.infiniteLives, s.infiniteAmmo, s.perfectStats, s.allCraft, s.customTextures,
              s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, stickCurveName(s.stickCurve), s.cStickDeadzone, s.cStickSensitivity, s.bumperClicks, gyroModeName(s.gyroMode),
              s.gyroButton.c_str(), s.gyroSpeedX, s.gyroSpeedY, s.gyroInvertY, s.stateSlot, s.achievements, s.raUser.empty() ? "-" : s.raUser.c_str(),
@@ -249,6 +250,7 @@ void save() {
     fprintf(f, "precompile_shaders=%d\n", s.precompileShaders);
     fprintf(f, "hud_edges=%d\n", s.hudEdges);
     fprintf(f, "tile_menus=%d\n", s.tileMenus);
+    fprintf(f, "cinematic_bars=%d\n", s.cinemaBars);
     fprintf(f, "# the game's own dither pattern (made for 640x480: a grid at higher resolutions)\n");
     fprintf(f, "game_dither=%d\n", s.gameDither);
     fprintf(f, "# master volume 0..100\n");
@@ -343,6 +345,7 @@ const char* buttonPromptsName(ButtonPrompts p) {
     switch (p) {
     case ButtonPrompts::Xbox: return "xbox";
     case ButtonPrompts::PlayStation: return "playstation";
+    case ButtonPrompts::Switch: return "switch";
     case ButtonPrompts::GameCube: return "gamecube";
     default: return "auto";
     }
