@@ -98,7 +98,8 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   the setting for one start. A reset from the menu goes straight back into the game.
 - Gamepads work through SDL (with rumble), also while the window is in the background. On an
   Xbox-style pad the face buttons follow the GameCube positions: A = A (fire), X (left) = B,
-  B (right) = X, Y = Y; LT/RT = L/R, RB = Z, right stick = C-stick, Menu = Start (a PlayStation
+  B (right) = X, Y = Y; LT/RT = L/R (throttle and brake), LB and RB = Z (hold with the stick to roll),
+  right stick = C-stick, Menu = Start (a PlayStation
   controller: cross = A, circle = B, square = X, triangle = Y). Keyboard: WASD or arrows steer, Space = A (fire),
   Left Shift = B, E = X, Q = Y, R = Z, 1/2 = L/R, Enter = Start, IJKL = C-stick, TFGH = D-pad.
 - The game's button prompts show your controller's buttons (the one each GameCube button is
@@ -109,14 +110,14 @@ choose Open Anyway in System Settings > Privacy & Security (or run
 - **Sticks** (F1 > Controls): the control stick and the C-stick each have a sensitivity (25-200%)
   and a round deadzone (0-50%; the output grows from zero at its edge), and the stick's whole
   travel past the deadzone is the game's range. **Response** sets how the craft's turning follows
-  the control stick: Smooth (default: gentle near the center, building up evenly to full speed),
-  Linear, or the game's own GameCube curve. A meter for each stick shows where it is and what the
+  the control stick: the game's own GameCube curve (default), Smooth (gentle near the center,
+  building up evenly to full speed) or Linear. A meter for each stick shows where it is and what the
   game gets (the turn and pitch speed for the control stick).
 - **Triggers**: L and R are analog, as on a GameCube controller: throttle and brake build up over
-  the whole pull, and the click at the end gives full boost or full brake. **Trigger clicks on LB /
-  RB** (Controls) moves the clicks to the bumpers, so the triggers only throttle and brake (Z then
-  moves to the right stick click). Bars on the Controls page show both triggers and what the game
-  gets.
+  the whole pull, and the click at the end gives full boost or full brake. **Move trigger clicks to
+  LB / RB** (Controls) puts the clicks on the bumpers instead, so the triggers only throttle and
+  brake (roll, Z, then moves to the right stick click). Bars on the Controls page show both
+  triggers and what the game gets.
 - **Gyro aiming** (Controls): turn and tilt the controller to steer in flight, on top of the stick,
   with the Steam Deck, a DualSense, DualShock 4 or Switch Pro Controller (Xbox controllers have no
   gyro): always on, while a button is held, toggled, or off while held - the Deck's left stick

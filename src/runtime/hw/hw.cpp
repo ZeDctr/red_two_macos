@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
 #include <ctime>
 #include <mutex>
 #include <set>
@@ -1035,10 +1036,29 @@ void aramDma() {
     const bool toMram = cntH & 0x8000;
     u8* m = physPtr(mm, cnt);
     if (!m) fatal("ARAM DMA with bad main memory address %08X len %X", mm, cnt);
+    // Past the 16 MiB of internal ARAM is the expansion port, empty on a GameCube: reads give
+    // zeros, writes go nowhere (Dolphin's HSP device "none"). The SDK's ARAM size check at boot
+    // (__ARChecksize, 0x800402C8) writes test data at 0x1000000 and 0x1400000 and reads it back:
+    // when those wrapped to 0 / 0x400000 here it took the ARAM for 8 MiB (__AR_Size 0x80096824),
+    // MusyX put its stream buffers at 8 MiB on top of sound effects the game had loaded there,
+    // and those effects played streamed music and crackled (issue #57: the AT-ATs' steps).
+    // The check also sets the memory map (AR_INFO 0xCC005012, low bits) to 4 for a while, in which
+    // a write below 4 MiB lands 4 MiB higher too; Dolphin's DSP.cpp Do_ARAM_DMA does the same.
+    constexpr u32 kAramSize = 16 * 1024 * 1024;
+    const bool map4 = (dsp[0x12 / 2] & 0xF) == 4;
     for (u32 i = 0; i < cnt; i++) {
-        u8& a = s_aram[(ar + i) & 0x00FFFFFF];
-        if (toMram) m[i] = a;
-        else a = m[i];
+        const u32 x = ar + i;
+        if (x >= kAramSize) {
+            if (toMram) m[i] = 0;
+            continue;
+        }
+        u8& a = s_aram[x];
+        if (toMram) {
+            m[i] = a;
+        } else {
+            a = m[i];
+            if (map4 && x < 0x400000) s_aram[x + 0x400000] = m[i];
+        }
     }
     if (toMram) watchHost(mm, cnt, "ARAM DMA");
     if (static const bool aramLog = envFlag("R2_ARAM_LOG"); aramLog) logf("aram", "%s mram %08X aram %08X len %X", toMram ? "A->M" : "M->A", mm, ar, cnt);
@@ -1079,6 +1099,11 @@ bool musyxFrameBusy() {
     return p && (rdPhys32(p) == 1 || rdPhys32(p + 4) == 1);
 }
 
+// For the perf lines (issue #22: sound running short in cutscenes on some PCs, the logs could not
+// say where): blocks the audio clock skipped when it fell too far behind (the guest thread held
+// up), and how late block boundaries came (waiting for the game or for MusyX).
+std::atomic<u64> s_aiLostBlocks{0}, s_aiLateSumUs{0}, s_aiLateMaxUs{0}, s_aiBoundaries{0};
+
 void onAi() {
     if (!s_aiDma.on) return;
     // The game hands the DMA its next buffer from the AI interrupt, and MusyX mixes a block two
@@ -1117,6 +1142,12 @@ void onAi() {
             logf("ai", "boundary %.2f ms late: interrupt %s, next %08X%s", late, pending ? "NOT handled" : "handled",
                  next, next == s_aiDma.addr ? " = the block just played" : "");
     }
+    if (s_aiDue && s_audioSpeed == 1.0) {
+        const u64 lateUs = now > s_aiDue ? (now - s_aiDue) * 1000000 / kTbClock : 0;
+        s_aiLateSumUs += lateUs;
+        if (lateUs > s_aiLateMaxUs.load(std::memory_order_relaxed)) s_aiLateMaxUs = lateUs;
+        s_aiBoundaries++;
+    }
     // the block just finished: latch the next one from the registers and interrupt
     s_aiDma.addr = ((u32(dsp[0x30 / 2]) << 16) | dsp[0x32 / 2]) & 0x03FFFFE0;
     s_aiDma.blocks = dsp[0x36 / 2] & 0x7FFF;
@@ -1133,7 +1164,9 @@ void onAi() {
     // Skipping shortens the blocks: MusyX (synthesis, sequencer, streams) keeps pace.
     u64& due = s_aiDue;
     const u64 period = u64(double(samples) * double(kTbClock) / (double(rate) * s_audioSpeed));
-    due = (due && now - due < (aiCatchUp() ? 16 : 4) * period) ? due + period : now + period;
+    const bool keep = due && now - due < (aiCatchUp() ? 16 : 4) * period;
+    if (due && !keep && s_audioSpeed == 1.0 && period) s_aiLostBlocks += (now - due) / period;
+    due = keep ? due + period : now + period;
     schedule(EV_AI, due);
 }
 
@@ -1286,6 +1319,16 @@ void peWrite(u32 off, u16 v) {
 
 }  // namespace
 
+// the perf lines: how late the audio clock's block boundaries came, and blocks it skipped
+std::string aiClockText() {
+    const u64 n = s_aiBoundaries.exchange(0), sum = s_aiLateSumUs.exchange(0), mx = s_aiLateMaxUs.exchange(0),
+              lost = s_aiLostBlocks.exchange(0);
+    char t[128];
+    snprintf(t, sizeof t, "blocks late %.1f ms on average (at most %.0f), %llu skipped", n ? sum / 1000.0 / double(n) : 0.0,
+             mx / 1000.0, (unsigned long long)lost);
+    return t;
+}
+
 // threads.cpp safepoint: a block due now (catch-up, see onAi) starts at once when the game's
 // handler and MusyX are ready for it; else the timer's EV_AI keeps waiting as before
 bool aiCatchUpPending() {
@@ -1338,6 +1381,15 @@ void peToken(u16 token, bool irq) {
 void peFinish() {
     pe[0x0A / 2] |= 0x08;
     piSetIrq(PI_PE_FINISH, pe[0x0A / 2] & 0x02);
+}
+
+// The GP's state for stall reports (profiler.cpp): a game thread waiting for its frames to be
+// drawn (frames in flight, 0x7FE0C670: one per submitted frame until its draw done's interrupt)
+std::string gpuStateText() {
+    char b[160];
+    snprintf(b, sizeof b, "; PE_CTRL %04X, PI cause %05X mask %05X, frames in flight %u", pe[0x0A / 2], pi_intsr, pi_intmr,
+             peekGuest32(0x7FE0C670));
+    return gxFifoText() + b;
 }
 
 // --- PI helpers (runtime.h) --------------------------------------------------------------

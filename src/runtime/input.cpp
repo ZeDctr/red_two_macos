@@ -270,7 +270,7 @@ std::vector<aurora::input::SourceId> s_setUp;  // controllers set up this sessio
 // full boost, which closes the S-foils (no firing), or full brake - easy to do by accident on a
 // trigger with no click to feel. With the option the triggers are analog only, over their whole
 // travel (curveTrigger), and LB / RB give the clicks (Aurora reads a digital L / R as the full
-// press, 180); Z, on RB by default (a chase camera while held), moves to the right stick click.
+// press, 180); Z (held with the stick: roll), on LB and RB by default, moves to the right stick click.
 // Done in the controller's bindings, so the Controls page shows them, and undone when the option
 // goes off unless the player changed them since. L / R without bindings of their own are read
 // from the triggers past the profile's threshold (Aurora's emulated triggers).
@@ -288,6 +288,34 @@ bool onlyButton(const std::vector<Binding>& list, SDL_GamepadButton b) {
     const auto* gb = list[0].input.control.get_if<PhysIn::GamepadButton>();
     return gb && gb->button == b;
 }
+bool isButton(const Binding& x, SDL_GamepadButton b) {
+    const auto* gb = x.input.control.get_if<PhysIn::GamepadButton>();
+    return gb && gb->button == b;
+}
+// whether button b drives any GameCube control (or extended one) in the controller's bindings
+bool buttonBound(aurora::pad::ProfileTarget target, SDL_GamepadButton b) {
+    const auto& c = aurora::pad::controls();
+    std::vector<aurora::binding::ControlId> ids{c.a,  c.b,    c.x,    c.y,     c.z,     c.start,  c.l,      c.r,      c.up,
+                                                c.down, c.left, c.right, c.leftX, c.leftY, c.rightX, c.rightY, c.triggerL, c.triggerR};
+    ids.insert(ids.end(), c.ext.begin(), c.ext.end());
+    for (const auto id : ids)
+        for (const auto& x : aurora::pad::bindings_for_control(target, id))
+            if (isButton(x, b)) return true;
+    return false;
+}
+
+// Z held with the stick to a side rolls the craft (checked in mission 1: Z + stick left rolled it
+// past 90 degrees, the stick alone banks ~15). Aurora puts Z on RB only; a controller whose Z is
+// just RB and whose LB drives nothing gets Z on LB too, so either bumper rolls (the user's layout,
+// 2026-11-25). The triggers stay throttle and brake.
+void rollOnBothBumpers(aurora::pad::ProfileTarget target, u32 port) {
+    const auto& c = aurora::pad::controls();
+    if (!onlyButton(aurora::pad::bindings_for_control(target, c.z), SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) return;
+    if (buttonBound(target, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) return;
+    if (aurora::pad::set_binding(target, c.z,
+                                 {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER), buttonBinding(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)}))
+        logf("input", "port %u: Z (roll) on LB and RB", port + 1);
+}
 
 void placeClicks(aurora::pad::ProfileTarget target, bool bumpers, u32 port) {
     const auto& c = aurora::pad::controls();
@@ -297,21 +325,21 @@ void placeClicks(aurora::pad::ProfileTarget target, bool bumpers, u32 port) {
         if (onlyButton(l, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && onlyButton(r, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) return;
         aurora::pad::set_binding(target, c.l, {buttonBinding(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)});
         aurora::pad::set_binding(target, c.r, {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)});
-        const auto onRb = [](const Binding& b) {
-            const auto* gb = b.input.control.get_if<PhysIn::GamepadButton>();
-            return gb && gb->button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+        const auto onBumper = [](const Binding& b) {
+            return isButton(b, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) || isButton(b, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
         };
-        if (std::erase_if(z, onRb)) {
+        if (std::erase_if(z, onBumper)) {
             if (z.empty()) z.push_back(buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
             aurora::pad::set_binding(target, c.z, std::move(z));
         }
-        logf("input", "port %u: the triggers' clicks on LB / RB, Z on the right stick click", port + 1);
+        logf("input", "port %u: the triggers' clicks on LB / RB, Z (roll) on the right stick click", port + 1);
     } else if (onlyButton(l, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && onlyButton(r, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
         aurora::pad::set_binding(target, c.l, {});  // read from the triggers again
         aurora::pad::set_binding(target, c.r, {});
         if (onlyButton(z, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
-            aurora::pad::set_binding(target, c.z, {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)});
-        logf("input", "port %u: the triggers' clicks back on the triggers, Z on RB", port + 1);
+            aurora::pad::set_binding(target, c.z, {buttonBinding(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER),
+                                                   buttonBinding(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)});
+        logf("input", "port %u: the triggers' clicks back on the triggers, Z (roll) on LB and RB", port + 1);
     }
 }
 
@@ -353,7 +381,10 @@ void setUpControllers() {  // JoystickAccess held
                 logf("input", "port %u: the %s trigger's click moved to %.0f%% of its travel (was a rebind at half)", port + 1,
                      left ? "left" : "right", threshold * 100.f);
         }
-        if (s.emulateTriggers) placeClicks(target, bumpers, port);
+        if (s.emulateTriggers) {
+            rollOnBothBumpers(target, port);
+            placeClicks(target, bumpers, port);
+        }
     }
 }
 
@@ -425,7 +456,7 @@ void triggerTest(const PADStatus& p1) {  // JoystickAccess held
 // R2_BUMPER_TEST=<seconds> (automated runs, with R2_BG_PADS=1 and bumper_clicks=1): a virtual
 // gamepad takes port 1; every 0.5 s from 1 s on one step (the right trigger, LB, RB, the right stick
 // click), port 1's L / R / Z and triggers logged for each; halfway the option goes off (the clicks
-// back on the triggers, Z on RB) and the same steps run again.
+// back on the triggers, Z on LB and RB) and the same steps run again.
 void bumperTest(const PADStatus& p1) {  // JoystickAccess held
     static const double start = getenv("R2_BUMPER_TEST") ? atof(getenv("R2_BUMPER_TEST")) : -1.0;
     if (start < 0) return;
@@ -762,6 +793,9 @@ void poll() {
             if (p.button == kTrigL) trigL = std::max(trigL, p.value);
             if (p.button == kTrigR) trigR = std::max(trigR, p.value);
         }
+    static u32 scriptedWas = 0;  // (a scripted press starting is logged: latency tests, R2_AUDIO_LOG)
+    if (scripted & ~scriptedWas) logf("input", "script: buttons %04X down", unsigned(scripted & ~scriptedWas));
+    scriptedWas = scripted;
     if (scripted) {
         st[0].err = PAD_ERR_NONE;
         st[0].button |= u16(scripted);

@@ -23,6 +23,7 @@
 80008720 VMIsiPager              # passed to VMInstallIsiVector
 80008BF0 VMInit                  # SDR1, segment 7, page table, handlers
 80006A40 main
+80041C04 AISrcInit             # SDK __AI_SRC_INIT: AICR 0xCC006C00 toggled 32 / 48 kHz, ticks of AISCNT timed with OSGetTime (calls at 0x80041C84 / 0x80041CC8 / 0x80041DB0), windows OSNanosecondsToTicks(31524 / 42024 +- 3000) at r13-17704..; callers 0x80041688, 0x8004177C, 0x8004186C
 # MusyX (identified against the MusyX decomp, MUSY_VERSION <= 2.0.0: its DSP ucode is byte-identical)
 8001D9EC salBuildCommandList   # nsDelay < 200 -> 10430 cycles; (nsDelay - 200) * busClock/400/5000 + 10430
 8002FEA4 MTXPerspective        # SDK (f1 fovY degrees, f2 aspect, f3 near, f4 far -> r3): the HUD's cameras (radar globe: callers 0x7FCD22C4, 0x7FCD4F60, 0x7FCD50F4, fov 100.4) pass the aspect their camera objects copied when created

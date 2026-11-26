@@ -2255,9 +2255,9 @@ void pageControls() {
                        25, 200, 5))
             s_changed = true;
         if (enumRow("Response", st.stickCurve, stickCurveLabel,
-                    "How fast the craft turns for how far the stick goes. Smooth: gentle near the center, building "
-                    "up evenly to full speed. Linear: in proportion to the stick. GameCube: the game's own curve, "
-                    "half speed up to 80% of the stick, then a jump to full."))
+                    "How fast the craft turns for how far the stick goes. GameCube (default): the game's own curve, "
+                    "half speed up to 80% of the stick, then a jump to full. Smooth: gentle near the center, "
+                    "building up evenly to full speed. Linear: in proportion to the stick."))
             s_changed = true;
         if (percentRow("Deadzone", st.stickDeadzone,
                        "How far the control stick moves before anything happens (round, and the output grows from "
@@ -2282,10 +2282,11 @@ void pageControls() {
         stickMeter(false);
     }
     heading("TRIGGERS");
-    if (toggleRow("Trigger clicks on LB / RB", settings::get().bumperClicks,
+    if (toggleRow("Move trigger clicks to LB / RB", settings::get().bumperClicks,
                   "A GameCube trigger clicks at the end of its pull: full boost (wings closed, no firing) or full brake. "
-                  "On: the triggers only throttle and brake, LB / RB click (as players set up in Dolphin), and Z moves "
-                  "from RB to the right stick click. Changes the controller's bindings below."))
+                  "Off: LT / RT click at the end of their pull, as on a GameCube, and LB / RB roll (Z, held with the "
+                  "stick). On: LT / RT only throttle and brake, LB / RB give the clicks (as players set up in "
+                  "Dolphin), and roll moves to the right stick click. Changes the controller's bindings below."))
         s_changed = true;
     triggerMeter();
     heading("ON-SCREEN BUTTONS");
@@ -3060,6 +3061,12 @@ struct RawMouse {
 static void rawMouseEvent(const SDL_Event& e) {
     static const bool log = envFlag("R2_MOUSE_LOG");  // R2_MOUSE_LOG=1: the mouse in the game's menus
     if (log && e.type != SDL_EVENT_MOUSE_MOTION) logf("mouse", "event %X", e.type);
+    // a touch screen's taps arrive as mouse events too (SDL's touch mouse): on a phone they press
+    // the on-screen buttons (touch.cpp), and pointing at a menu item under them would select it
+    const SDL_MouseID which = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.which
+                              : e.type == SDL_EVENT_MOUSE_WHEEL ? e.wheel.which
+                                                                : e.button.which;
+    if (which == SDL_TOUCH_MOUSEID || which == SDL_PEN_MOUSEID) return;
     std::lock_guard lk(s_gameMouseMu);
     switch (e.type) {
     case SDL_EVENT_MOUSE_MOTION:
@@ -3537,7 +3544,7 @@ void menuDraw() {
             ++it;
         }
     }
-    if (cinematicSkip()) {
+    if (skipShown()) {
         const char* text = "SKIPPING";
         const float px = 34.f * ui;
         const float tw = textWidth(s_font, px, text, 8.f * ui);
