@@ -109,6 +109,11 @@ add_library(r2game STATIC ${GEN_SOURCES})
 set_target_properties(r2game PROPERTIES JOB_POOL_COMPILE r2gen)
 target_compile_definitions(r2game PRIVATE ${R2_DEFS})
 target_include_directories(r2game PUBLIC src/runtime "${GEN_DIR}")
+# -fcf-protection is x86 CET only; not a valid clang option on AArch64 or other non-x86 targets.
+# (Set before its first use below: CMake expands ${_r2_cet} when each command runs.)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(_r2_cet -fcf-protection=none)
+endif()
 if(MSVC)
     # clang-cl: generated code is huge and full of labels
     target_compile_options(r2game PRIVATE /O2 -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable
@@ -146,10 +151,6 @@ if(MSVC)
     set(_r2_fp "/clang:-ffp-contract=off")
 else()
     set(_r2_fp "-ffp-contract=off")
-endif()
-# -fcf-protection is x86 CET only; not a valid clang option on AArch64 or other non-x86 targets.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
-    set(_r2_cet -fcf-protection=none)
 endif()
 target_compile_options(r2game PRIVATE ${_r2_arch} ${_r2_fp})
 
