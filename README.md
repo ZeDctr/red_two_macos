@@ -13,8 +13,8 @@ The game's own PowerPC code is translated to C++ ahead of time and runs on a nat
 that stands in for the console's hardware. **No game data is included**: you need your own disc
 image of the USA release (`GSWE64`, revision 0), for the downloads as for your own build.
 
-**Downloads**: Windows (zip) and Linux / Steam Deck (AppImage) builds are on the
-[Releases](../../releases) page. They contain the game's code in recompiled form, none of its data:
+**Downloads**: Windows (zip), Linux / Steam Deck (AppImage), macOS (Apple Silicon, zip) and
+Android (APK, experimental) builds are on the [Releases](../../releases) page. They contain the game's code in recompiled form, none of its data:
 start it and choose your disc image (`.iso`, `.gcm`, `.rvz` or `.wia`, wherever it is) on the
 launcher's disc page: type or paste its path, pick it in the file dialog, or find it in the
 built-in browser (controller-friendly). Red Two remembers it; one next to the program is also
@@ -23,7 +23,8 @@ Or build Red Two yourself (below): the build recompiles the game from your disc.
 is portable (everything of yours stays in its `user` folder) and brings the Visual C++ runtime
 with it; it needs a CPU with AVX2 (Intel Haswell / AMD Ryzen or newer) and says so otherwise.
 
-> Status: playable on Windows and Linux (also packaged as an AppImage for the Steam Deck):
+> Status: playable on Windows, Linux (also packaged as an AppImage for the Steam Deck) and macOS;
+> the Android build is experimental (see below):
 > menus, cutscenes and missions at full speed with graphics (Aurora), sound (an emulation of the
 > MusyX audio DSP), controls, saving, save states, widescreen, mods, cheats and RetroAchievements.
 
@@ -89,6 +90,18 @@ built it. A copy downloaded or AirDropped to another Mac is quarantined: open it
 choose Open Anyway in System Settings > Privacy & Security (or run
 `xattr -dr com.apple.quarantine "Red Two.app"`).
 
+### Android (experimental)
+
+The APK (`RedTwo-v<version>-android-arm64.apk`) is for 64-bit ARM phones and handhelds with
+Vulkan 1.1 (Android 10 or newer). It is new and has had little testing on real devices: reports
+are welcome. Install it (your phone asks to allow installs from that app), start Red Two and
+choose your disc image in the system's file picker, or copy it into
+`Android/data/io.github.gminustwo.redtwo/files` over USB first. A controller works, and touch
+controls are on screen; the back button or gesture opens the menu. Settings, the memory card,
+save states and logs are in that same folder. A save state loads only in the session that made
+it (the game's own saves on the memory card are not affected). Updates: the menu says when a new
+version is out and opens its page; install the new APK over the old one.
+
 ### Playing
 
 - **Launcher**: Red Two opens on its settings (the same pages as the in-game menu) before the
@@ -150,7 +163,7 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   so the folder can live anywhere (another drive, a NAS). An install that has no `user` folder
   but an older `%APPDATA%\Red Two` keeps using that one; create `user` to make it portable (its
   first start copies the settings, controls and memory card over). Linux: `~/.local/share/Red Two/`;
-  macOS: `~/Library/Application Support/Red Two/`.
+  macOS: `~/Library/Application Support/Red Two/`; Android: `Android/data/io.github.gminustwo.redtwo/files`.
 - **Cheats** (F1 > Cheats): invincibility, infinite lives, infinite bombs, perfect mission
   stats (the results screen says 0:01, every enemy destroyed, 100% accuracy, no friendlies or
   lives lost and 100% targeting computer efficiency, and the medal is awarded for those), and
@@ -238,6 +251,7 @@ the open issues first, and report one problem per issue. What to have at hand:
     `%APPDATA%\Red Two\logs`)
   - Steam Deck / Linux: `~/.local/share/Red Two/logs`
   - macOS: `~/Library/Application Support/Red Two/logs`
+  - Android: `Android/data/io.github.gminustwo.redtwo/files/logs` (over USB from a PC)
 
   It lists your settings, the frame rate every 30 seconds, and what the game was doing in a
   freeze or a crash. It also shows folder paths, which can include your user name: edit those
