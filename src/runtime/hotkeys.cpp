@@ -243,7 +243,7 @@ void selfTest() {
         bool down;
         const char* what;
     };
-    // R2_HOTKEY_TEST_BIND=1 (with R2_MENU=1 R2_MENU_SECTION=3 R2_MENU_PAD=1 R2_MENU_ROW=13): A on
+    // R2_HOTKEY_TEST_BIND=1 (with R2_MENU=1 R2_MENU_SECTION=4 R2_MENU_PAD=1 R2_MENU_ROW=14): A on
     // the save state row, then Back + left trigger: the new combination
     static const bool bind = envFlag("R2_HOTKEY_TEST_BIND");
     if (bind) {

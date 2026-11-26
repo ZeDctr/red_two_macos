@@ -112,6 +112,7 @@ void set(const std::string& key, const std::string& value) {
     else if (key == "gyro") { if (n >= 0 && n < int(GyroMode::Count)) s.gyroMode = GyroMode(n); }
     else if (key == "gyro_button") s.gyroButton = value;
     else if (key == "bumper_clicks") s.bumperClicks = parseBool(value);
+    else if (key == "invert_y") s.invertY = parseBool(value);
     else if (key == "gyro_speed_x") s.gyroSpeedX = std::clamp(n, kGyroSpeedMin, kGyroSpeedMax);
     else if (key == "gyro_speed_y") s.gyroSpeedY = std::clamp(n, kGyroSpeedMin, kGyroSpeedMax);
     else if (key == "gyro_invert_y") s.gyroInvertY = parseBool(value);
@@ -207,11 +208,11 @@ std::string summary() {
              "disc_path=%s launcher=%d check_updates=%d discord_presence=%d fullscreen=%d resolution=%s msaa=%d anisotropy=%d aspect=%s fps=%d vsync=%d ubershaders=%d precompile_shaders=%d hud_edges=%d tile_menus=%d cinematic_bars=%d game_dither=%d "
              "show_fps=%d volume=%d background_audio=%d speakers=%s skip_logos=%d skip_cutscenes=%d fast_disc=%d invincible=%d "
              "infinite_lives=%d infinite_ammo=%d perfect_stats=%d all_craft=%d custom_textures=%d prefetch_textures=%d "
-             "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d stick_curve=%s cstick_deadzone=%d cstick_sensitivity=%d bumper_clicks=%d gyro=%s gyro_button=%s gyro_speed=%d/%d gyro_invert_y=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
+             "textures_folder=%s button_prompts=%s stick_deadzone=%d stick_sensitivity=%d stick_curve=%s cstick_deadzone=%d cstick_sensitivity=%d bumper_clicks=%d invert_y=%d gyro=%s gyro_button=%s gyro_speed=%d/%d gyro_invert_y=%d state_slot=%d achievements=%d ra_user=%s ra_notifications=%d ra_encore=%d",
              s.discPath.empty() ? "-" : s.discPath.c_str(), s.launcher, s.checkUpdates, s.discordPresence, s.fullscreen, resolutionName(s.resolution), s.msaa, s.anisotropy, aspectName(s.aspect), s.fps, s.vsync, s.ubershaders, s.precompileShaders, s.hudEdges,
              s.tileMenus, s.cinemaBars, s.gameDither, s.showFps, s.volume, s.backgroundAudio, speakersName(s.speakers), s.skipLogos, s.skipCutscenes,
              s.fastDisc, s.invincible, s.infiniteLives, s.infiniteAmmo, s.perfectStats, s.allCraft, s.customTextures,
-             s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, stickCurveName(s.stickCurve), s.cStickDeadzone, s.cStickSensitivity, s.bumperClicks, gyroModeName(s.gyroMode),
+             s.prefetchTextures, s.texturesFolder.empty() ? "-" : s.texturesFolder.c_str(), buttonPromptsName(s.buttonPrompts), s.stickDeadzone, s.stickSensitivity, stickCurveName(s.stickCurve), s.cStickDeadzone, s.cStickSensitivity, s.bumperClicks, s.invertY, gyroModeName(s.gyroMode),
              s.gyroButton.c_str(), s.gyroSpeedX, s.gyroSpeedY, s.gyroInvertY, s.stateSlot, s.achievements, s.raUser.empty() ? "-" : s.raUser.c_str(),
              s.raNotifications, s.raEncore);
     return b;
@@ -292,6 +293,7 @@ void save() {
     fprintf(f, "gyro=%d\n", int(s.gyroMode));
     fprintf(f, "# the triggers' clicks (full boost / brake) on LB / RB, the triggers analog only, Z on the right stick click\n");
     fprintf(f, "bumper_clicks=%d\n", s.bumperClicks);
+    fprintf(f, "invert_y=%d\n", s.invertY);
     fprintf(f, "# SDL gamepad button name: misc3 / misc4 the Steam Deck's left / right stick touch, paddle1-4 R4 L4 R5 L5\n");
     fprintf(f, "gyro_button=%s\n", s.gyroButton.c_str());
     fprintf(f, "# percent (%d-%d): turning (left / right) and pitch (up / down)\n", kGyroSpeedMin, kGyroSpeedMax);

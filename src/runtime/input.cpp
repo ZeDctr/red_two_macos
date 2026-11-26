@@ -742,6 +742,9 @@ void poll() {
         for (int i = 0; i < PAD_CHANMAX; i++)
             if (auto& e = st[i]; e.err == PAD_ERR_NONE) {
                 mainStickToGame(float(e.stickX) / 127.f, float(e.stickY) / 127.f, e.stickX, e.stickY);
+                // Invert Y (settings invert_y, issue #59): the game dives with the stick up, like a
+                // plane's; flipped only while flying, so menus keep up = up (gyro aiming has its own)
+                if (settings::get().invertY && playerFlying()) e.stickY = s8(std::clamp(-int(e.stickY), -127, 127));
                 cStickToGame(float(e.substickX) / 127.f, float(e.substickY) / 127.f, e.substickX, e.substickY);
                 curvePort(e, i);
             }
@@ -801,8 +804,10 @@ void poll() {
         st[0].button |= u16(scripted);
         if (scripted & kTrigL) st[0].triggerLeft = trigL;
         if (scripted & kTrigR) st[0].triggerRight = trigR;
-        if (scripted & kStickUp) st[0].stickY = 127;
-        if (scripted & kStickDown) st[0].stickY = -127;
+        // (a scripted stick stands for a thumb on it: Invert Y applies as in shape)
+        const bool flipY = settings::get().invertY && playerFlying();
+        if (scripted & kStickUp) st[0].stickY = flipY ? -127 : 127;
+        if (scripted & kStickDown) st[0].stickY = flipY ? 127 : -127;
         if (scripted & kStickLeft) st[0].stickX = -127;
         if (scripted & kStickRight) st[0].stickX = 127;
     }

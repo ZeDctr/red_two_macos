@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Disc "<your Rogue Lead
 build\windows\red_two.exe --disc "<your Rogue Leader.rvz>"
 ```
 
-Without `--disc` the game takes the disc chosen in the launcher before (F1 > DISPLAY > Game disc),
+Without `--disc` the game takes the disc chosen in the launcher before (F1 > GAME > Game disc),
 else looks for `orig\GSWE64.iso`, `orig\GSWE64.rvz`, `GSWE64.rvz`, `GSWE64.iso` and any GSWE64
 image next to the program or in the user folder, else the launcher asks for it.
 `tools\rvz.py` (Python + libzstd) can still extract a disc or convert it to ISO.
@@ -112,7 +112,8 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   travel past the deadzone is the game's range. **Response** sets how the craft's turning follows
   the control stick: the game's own GameCube curve (default), Smooth (gentle near the center,
   building up evenly to full speed) or Linear. A meter for each stick shows where it is and what the
-  game gets (the turn and pitch speed for the control stick).
+  game gets (the turn and pitch speed for the control stick). **Invert Y axis** makes the stick climb when
+  pushed up and dive when pulled down, in flight only (the menus keep up = up).
 - **Triggers**: L and R are analog, as on a GameCube controller: throttle and brake build up over
   the whole pull, and the click at the end gives full boost or full brake. **Move trigger clicks to
   LB / RB** (Controls) puts the clicks on the bumpers instead, so the triggers only throttle and
@@ -158,9 +159,10 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   hall, documentary, audio commentary, credits, black and white - kept in the game's save as
   if the codes had been entered.
 - **RetroAchievements** (F1 > Achievements): log in with your retroachievements.org account
-  (only the login token is stored) or take Dolphin's login; softcore only, so save states and
+  (only the login token is stored), on a sign-in page Red Two opens in your browser, or take
+  Dolphin's login; softcore only, so save states and
   cheats stay usable. Unlocks pop up in the top right corner.
-- **Reset game**, **Back to launcher** and **Quit to desktop** are at the top of the menu's first page.
+- **Reset game**, **Back to launcher** and **Quit to desktop** are on the menu's first tab, GAME.
 - **Save states**: Back + RB saves, Back + LB loads, Back + D-pad right / left picks the slot
   (8 slots; keyboard F5 / F8, F7 / F6). F1 > Controls has the slot, save / load buttons and the
   hotkeys, each any combination of buttons (or keys) held together: pick the row, press A, hold
@@ -203,14 +205,14 @@ choose Open Anyway in System Settings > Privacy & Security (or run
   game's own sound setting (Options > Sound Settings) on STEREO. `R2_NO_AUDIO=1` runs without
   sound.
 - **Updates**: at start Red Two asks GitHub whether a newer version is out and offers it at the top
-  of the menu's first page: download and install, then a restart into it, with your settings,
+  of the menu's GAME tab: download and install, then a restart into it, with your settings,
   saves, states and texture packs kept (the download is checked against the release's
   checksums). The AppImage replaces itself under the same name, so a Steam shortcut keeps
-  working. DISPLAY > Check for updates turns the check off; the version is under the menu's title.
+  working. GAME > Check for updates turns the check off; the version is under the menu's title.
 - **Discord**: with the Discord app open on the same PC, your Discord profile shows that you're
   playing Red Two, the mission you're in (flying, paused or in a cutscene; the hangar, the menus,
   the launcher) and for how long. Only the Discord app on your PC is told, nothing else is sent;
-  DISPLAY > Discord Rich Presence turns it off. DISPLAY > Red Two's Discord (in the launcher and
+  GAME > Discord Rich Presence turns it off. GAME > Red Two's Discord (in the launcher and
   in game) opens the invite to [Red Two's Discord server](https://discord.gg/cc65jQwbqG) for chat
   and news; bug reports go on GitHub Issues (see below).
 - Every session writes a log to the user folder's `logs` (Linux: `~/.local/share/Red Two/logs`),
@@ -225,7 +227,7 @@ the open issues first, and report one problem per issue. What to have at hand:
 
 - **Red Two's version**: under the menu's title (F1, or the controller's Back / Select), e.g.
   "VERSION 1.3". Newer versions may already fix it: the menu offers updates at the top of its
-  first page.
+  GAME tab.
 - **What happened and where**: the mission (or menu, cutscene) and the moment, whether it happens
   every time, and how to get there.
 - **The session log (required)**: a bug report needs the log of the play session where the

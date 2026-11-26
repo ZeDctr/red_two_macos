@@ -118,6 +118,9 @@ static bool s_nativeSceneSkip = false;   // SceneSkipAllowed answers yes once
 static double s_nativeSkipFallbackSecs = 0.0;
 bool cinematicSkip() { return s_skipDraws.load(std::memory_order_relaxed); }
 bool skipShown() { return s_skipShown.load(std::memory_order_relaxed); }
+// the player's craft flies: not paused, in a cutscene or in the front end (invert Y, input.cpp)
+static std::atomic<bool> s_playerFlying{false};
+bool playerFlying() { return s_playerFlying.load(std::memory_order_relaxed); }
 
 namespace {
 struct CutsceneSkipState {
@@ -405,6 +408,7 @@ void hle_GameFrameDelta(Ctx& c) {
         else if (gameState == 3) phase = Phase::FrontEnd;
         else if (craft) phase = Phase::Flying;
         discord::gameFrame(phase);
+        s_playerFlying.store(phase == Phase::Flying, std::memory_order_relaxed);
     }
     // R2_DT_LOG: every 10 s, frames and the game time they advanced against the wall clock
     static const bool dtLog = envFlag("R2_DT_LOG");
