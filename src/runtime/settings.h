@@ -56,6 +56,7 @@ struct Settings {
     Aspect aspect = Aspect::R4_3;
     bool hudEdges = true;  // widescreen: the flight HUD at the screen edges
     bool tileMenus = true;  // widescreen: menu backgrounds continue into the sides
+    bool cinemaBars = true;  // widescreen: letterboxed cinematics keep their 2.1:1 frame with bars (gfx/menu.cpp)
     // The game's own dither: a screen-space texture blended over every frame, sized for 640x480;
     // above that it shows as a coarse grid (the Hoth sky). Off like Dolphin's "Disable Dithering" code.
     bool gameDither = false;
@@ -124,8 +125,9 @@ struct Settings {
     // The triggers' clicks (full boost / full brake) on LB / RB, the triggers analog only, Z from
     // RB to the right stick click (input.cpp placeClicks: the controllers' bindings)
     bool bumperClicks = false;
+    bool invertY = false;  // in flight: stick up climbs (issue #59)
     int stickSensitivity = 100;  // 25..200
-    StickCurve stickCurve = StickCurve::Smooth;
+    StickCurve stickCurve = StickCurve::GameCube;  // the game's own response (the user's call, 2026-11-25)
     // Gyro aiming (gyro.cpp): turning and tilting the controller (the Steam Deck itself, a
     // DualSense, a Switch Pro Controller) steers the craft in flight, on top of the stick. The
     // button is an SDL gamepad button name (misc3 is the Deck's left stick touch; "touch" a finger
@@ -139,12 +141,14 @@ struct Settings {
     // combination held together: controller buttons by SDL name, keys by SDL key name, " + "
     // between them; empty = none
     int stateSlot = 1;
-    std::string hotkeyPad[5] = {"back + rightshoulder", "back + leftshoulder", "back + dpright", "back + dpleft", "back + dpup"};
-    std::string hotkeyKeys[5] = {"F5", "F8", "F7", "F6", "F9"};
+    std::string hotkeyPad[6] = {"back + rightshoulder", "back + leftshoulder", "back + dpright", "back + dpleft", "back + dpup",
+                                "leftstick"};
+    std::string hotkeyKeys[6] = {"F5", "F8", "F7", "F6", "F9", "C"};
 };
 // hotkey actions (the index into hotkeyPad / hotkeyKeys)
-// (HkToggleTextures: texture packs hidden / shown at once, mods.cpp toggleTexturesShown)
-enum HotkeyAction : int { HkSaveState = 0, HkLoadState, HkNextSlot, HkPrevSlot, HkToggleTextures, HkCount };
+// (HkToggleTextures: texture packs hidden / shown at once, mods.cpp toggleTexturesShown;
+// HkCommentary: the audio commentary paused / resumed, hle_game.cpp)
+enum HotkeyAction : int { HkSaveState = 0, HkLoadState, HkNextSlot, HkPrevSlot, HkToggleTextures, HkCommentary, HkCount };
 const char* hotkeyDefault(int action, bool pad);
 
 Settings& get();

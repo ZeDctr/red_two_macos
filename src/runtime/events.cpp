@@ -190,6 +190,7 @@ void schedule(int id, u64 at) {
         if (s_earliest.load() < before) wakeTimer();
         dueNow = at <= tbNow();
     }
+    // already due: the guest's next safepoint runs it, not the timer thread's next pass (up to 0.2 ms later)
     if (dueNow) raisePending();
 }
 

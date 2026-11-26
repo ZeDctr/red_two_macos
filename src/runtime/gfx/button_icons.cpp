@@ -1,11 +1,15 @@
-// On-screen button prompts as on an Xbox or PlayStation controller (setting button_prompts:
-// automatic by default - PlayStation symbols while port 1's controller is a PS3 / PS4 / PS5 pad,
-// Xbox buttons otherwise - or always one of them, or the game's own GameCube ones).
+// On-screen button prompts as on an Xbox, PlayStation or Switch controller (setting
+// button_prompts: automatic by default - PlayStation symbols while port 1's controller is a PS3 /
+// PS4 / PS5 pad, Switch letters (dark buttons, B / A / Y / X by position) with a Switch Pro
+// Controller or Joy-Cons, Xbox buttons otherwise - or always one of them, or the game's own
+// GameCube ones). SELECT CRAFT's bar also gets a right stick for its C-stick ("> camera") in every
+// style but GameCube's. The Switch style and the right stick are from ZeDctr's Red Two Plus fork
+// (github.com/ZeDctr/red_two_plus).
 //
 // The game's prompts ("PRESS [Y] FOR MISSION DESCRIPTION", SELECT CRAFT's "[X] > pilot") use
 // four 32x32 RGBA8 textures it loads with the front end: the GameCube A (green), B (red) and
 // the grey kidney-shaped X and Y (found by dumping memory around the Y icon, R2_TEX_DUMP and
-// R2_MEM_DUMP; the C-stick icon stays). Each is replaced through Aurora's texture replacement
+// R2_MEM_DUMP). Each is replaced through Aurora's texture replacement
 // registry (keyed by the XXH64 of its pixels, like a Dolphin texture pack, but with a priority
 // above any pack) by a round button drawn here: the face the GameCube button is bound to on
 // port 1's controller (Controls page; by default A = A, B = X, X = B, Y = Y on an Xbox pad, the
