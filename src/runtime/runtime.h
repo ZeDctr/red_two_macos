@@ -21,6 +21,7 @@ void printTraceRing(FILE* f, int n);
 void debugInit();  // R2_LOGFN, R2_WATCH
 void dumpThreads();  // guest OSThread list (debugging)
 u32 peekGuest32(u32 a);  // a guest word without faulting (VM pages not mapped read as 0)
+std::string gpuStateText();  // hw.cpp: the GP's FIFO, breakpoint, PE and PI state (stall reports)
 std::string guestBacktrace();  // threads.cpp: the running guest thread's call chain (fatal errors)
 void printHostStack(FILE* f, int skip);  // main.cpp: the host call stack, symbolized (fatal errors)
 #ifndef _WIN32
@@ -160,6 +161,8 @@ u32 viXfbLines();          // lines the VI scans out (304 for letterboxed cinema
 void setAudioSpeed(double speed, bool mute);  // hw.cpp: AI (audio) clock speed-up, output muted
 void setDvdBoost(double boost);               // hw.cpp: disc reads that much faster
 bool cinematicSkip();                         // hle_game.cpp: a cinematic (or the boot screen) is being skipped
+bool skipShown();                             // hle_game.cpp: ... by a skip the player chose ("SKIPPING" shown)
+std::string aiClockText();  // hw.cpp: perf lines - how late audio blocks came, blocks skipped (since the last call)
 bool aiCatchUpPending();  // hw.cpp: an audio (AI) block is due and MusyX may take it (threads.cpp safepoint)
 bool aiCatchUpStep();     // hw.cpp: start that block now if MusyX is ready for it
 void setGameAspect(double aspect);  // hle_game.cpp: the game's camera aspect (widescreen)

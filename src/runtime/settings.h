@@ -127,7 +127,7 @@ struct Settings {
     // RB to the right stick click (input.cpp placeClicks: the controllers' bindings)
     bool bumperClicks = false;
     int stickSensitivity = 100;  // 25..200
-    StickCurve stickCurve = StickCurve::Smooth;
+    StickCurve stickCurve = StickCurve::GameCube;  // the game's own response (the user's call, 2026-11-25)
     // Gyro aiming (gyro.cpp): turning and tilting the controller (the Steam Deck itself, a
     // DualSense, a Switch Pro Controller) steers the craft in flight, on top of the stick. The
     // button is an SDL gamepad button name (misc3 is the Deck's left stick touch; "touch" a finger

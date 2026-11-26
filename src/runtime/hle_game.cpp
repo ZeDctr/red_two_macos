@@ -111,9 +111,13 @@ constexpr double kSkipMaxSeconds = 10.0;
 static bool s_skip = false;
 static bool s_bootSkipping = false;      // the boot screen run flat out (skip intro logos)
 static std::atomic<bool> s_skipDraws{false};
+// "SKIPPING" is shown only for a skip the player turned on or asked for: fast loading also runs the
+// loading screen before the intro (at boot and after leaving a mission) flat out, and that is no skip
+static std::atomic<bool> s_skipShown{false};
 static bool s_nativeSceneSkip = false;   // SceneSkipAllowed answers yes once
 static double s_nativeSkipFallbackSecs = 0.0;
 bool cinematicSkip() { return s_skipDraws.load(std::memory_order_relaxed); }
+bool skipShown() { return s_skipShown.load(std::memory_order_relaxed); }
 
 namespace {
 struct CutsceneSkipState {
@@ -296,7 +300,10 @@ void hle_GameFrameDelta(Ctx& c) {
             presentPaced(false);
             setDvdBoost(50.0);
         } else {
-            logf("skip", "boot screen done after %.1f s", bootSkipFor);
+            if (s.skipLogos || skipBootOnce)
+                logf("skip", "boot screen done after %.1f s", bootSkipFor);
+            else
+                logf("skip", "loading screen before the intro run fast (fast loading) for %.1f s", bootSkipFor);
             if (!s_skip) {
                 viSetRateHz(frameRateHz());
                 presentPaced(true);
@@ -326,6 +333,8 @@ void hle_GameFrameDelta(Ctx& c) {
     }
     // (the front end is drawn while the boot skip runs into it: screen 0x15 leads to the title)
     s_skipDraws.store(s_skip || (s_bootSkipping && !inFrontEndMenu), std::memory_order_relaxed);
+    s_skipShown.store(s_skip || (s_bootSkipping && !inFrontEndMenu && (s.skipLogos || skipBootOnce)),
+                      std::memory_order_relaxed);
     if (s_skip || s_bootSkipping) {
         c.f[1] = c.ps1[1] = rsingle(kSkipStep);
         setAudioSpeed(std::min(kSkipStep / real, 64.0), true);
@@ -2164,6 +2173,7 @@ void hleAfterLoad() {
     if (s_skip || s_bootSkipping) {
         s_skip = s_bootSkipping = false;
         s_skipDraws.store(false, std::memory_order_relaxed);
+        s_skipShown.store(false, std::memory_order_relaxed);
         viSetRateHz(frameRateHz());
         presentPaced(true);
         setDvdBoost(1.0);
