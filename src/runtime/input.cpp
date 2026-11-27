@@ -292,7 +292,8 @@ void applyRumble() {  // JoystickAccess held
             if (s_impulse.startTb && s_impulse.durSec > 0.0) {
                 const double age = double(now - s_impulse.startTb) / double(kTbClock);
                 if (age < s_impulse.durSec) {
-                    const float env = float(1.0 - age / s_impulse.durSec);
+                    const double p = age / s_impulse.durSec;
+                    const float env = (p < 0.55) ? 1.f : float((1.0 - p) / 0.45);
                     low = std::max(low, s_impulse.low * env);
                     high = std::max(high, s_impulse.high * env);
                 } else {
@@ -318,13 +319,17 @@ void applyRumble() {  // JoystickAccess held
             }
         }
         static u16 s_lastLow = 0, s_lastHigh = 0;
+        static u64 s_lastRumbleSentTb = 0;
         const u16 uLow = u16(std::clamp(low, 0.f, 1.f) * 65535.f);
         const u16 uHigh = u16(std::clamp(high, 0.f, 1.f) * 65535.f);
         if (g) {
-            if (uLow != s_lastLow || uHigh != s_lastHigh || uLow > 0 || uHigh > 0) {
-                SDL_RumbleGamepad(g, uLow, uHigh, (uLow || uHigh) ? 180 : 0);
+            const bool changed = (uLow != s_lastLow || uHigh != s_lastHigh);
+            const bool refreshDue = (uLow > 0 || uHigh > 0) && (now - s_lastRumbleSentTb) >= (kTbClock / 10);
+            if (changed || refreshDue) {
+                SDL_RumbleGamepad(g, uLow, uHigh, (uLow || uHigh) ? 250 : 0);
                 s_lastLow = uLow;
                 s_lastHigh = uHigh;
+                s_lastRumbleSentTb = now;
             }
         } else if (s_rumbleWant[0] != s_rumbleSent[0]) {
             s_rumbleSent[0] = s_rumbleWant[0];

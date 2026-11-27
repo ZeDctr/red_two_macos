@@ -1375,11 +1375,14 @@ void hle_GameFrameDelta(Ctx& c) {
         static float s_hapPrevHp = 0.f;
         static bool s_hapFlyingBefore = false;
         static bool s_hapPrevTargeting = false;
+        static bool s_hapPrevY = false;
+        static u64 s_hapLastTargetingPulseTb = 0;
         if (craft != s_hapCraft) {
             s_hapCraft = craft;
             s_hapPrevHp = 0.f;
             s_hapFlyingBefore = false;
             s_hapPrevTargeting = false;
+            s_hapPrevY = false;
         }
         if (craft && isFlying) {
             const float hp = float(s2d(rd32(craft + 0x6F4u)));
@@ -1392,15 +1395,23 @@ void hle_GameFrameDelta(Ctx& c) {
             s_hapPrevHp = hp;
             const u64 tTb = s_targetingFrameTb.load(std::memory_order_relaxed);
             const bool targetingOpen = tTb != 0 && (tb - tTb) < (kTbClock / 20);
-            if (s_hapFlyingBefore && targetingOpen != s_hapPrevTargeting) {
-                if (targetingOpen) input::rumbleImpulse(0.28f, 0.68f, 0.14f);  // Zielvisier ausgeklappt
-                else input::rumbleImpulse(0.38f, 0.45f, 0.10f);                // Zielvisier eingeklappt
+            const bool yDown = !gfx::menuOpen() && (pad.buttons & 0x0800u) != 0;  // PAD_BUTTON_Y
+            const bool yEdge = s_hapFlyingBefore && yDown && !s_hapPrevY;
+            s_hapPrevY = yDown;
+            const bool passEdge = s_hapFlyingBefore && targetingOpen != s_hapPrevTargeting;
+            if ((yEdge || passEdge) && (tb - s_hapLastTargetingPulseTb) > (kTbClock * 45 / 100)) {
+                s_hapLastTargetingPulseTb = tb;
+                logf("haptic", "targeting computer %s",
+                     passEdge ? (targetingOpen ? "deployed" : "stowed") : "toggled (Y)");
+                if (passEdge && !targetingOpen) input::rumbleImpulse(0.45f, 0.40f, 0.18f);
+                else input::rumbleImpulse(0.50f, 0.50f, 0.22f);
             }
             s_hapPrevTargeting = targetingOpen;
             s_hapFlyingBefore = true;
         } else {
             s_hapFlyingBefore = false;
             s_hapPrevTargeting = false;
+            s_hapPrevY = false;
         }
     }
     // R2_DT_LOG: every 10 s, frames and the game time they advanced against the wall clock
