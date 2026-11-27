@@ -4,13 +4,13 @@
 
 # Red Two Plus
 
-An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.3** with additional UI, audio, cinema framing, and quality-of-life enhancements.
+An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.4** with additional UI, audio, haptic feedback, cinema framing, and quality-of-life enhancements.
 
 The game's PowerPC code is translated to C++ ahead of time and runs natively via Aurora (Metal on macOS, Direct3D 12 / Vulkan on Windows) and SDL3. **No game data or texture packs are included**: you need your own disc image of the USA release (`GSWE64`, revision 0), for both the prebuilt downloads and your own build.
 
 ## Quick Start
 
-1. Download `RedTwo-macOS-Plus-v1.3.2-arm64.zip` (macOS Apple Silicon) or `RedTwo-Windows-Plus-v1.3.2-x64.zip` (Windows x64, experimental) from the [Releases](../../releases) page and unzip it.
+1. Download `RedTwo-macOS-Plus-v1.4.1-arm64.zip` (macOS Apple Silicon) or `RedTwo-Windows-Plus-v1.4.1-x64.zip` (Windows x64, experimental) from the [Releases](../../releases) page and unzip it.
 2. **First launch (macOS Gatekeeper)**: because the app is ad-hoc signed and not notarized by Apple, macOS will block it on first launch (or say it is "damaged"). Clear the quarantine flag once in Terminal:
    ```bash
    xattr -cr "/path/to/Red Two.app"
@@ -19,9 +19,10 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively via
 3. Open `Red Two.app` and select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
 4. Optional: copy a Dolphin HD texture pack (`GSWE64` folder) into `~/Library/Application Support/Red Two/textures/` or pick its folder under **F1 → MODS → Texture pack folder**.
 
-## Red Two Plus Enhancements (on top of Red Two v1.3)
+## Red Two Plus Enhancements (on top of Red Two v1.4)
 
 - **Native Apple Silicon (ARM64 / Metal) & Experimental Windows (x64 / D3D12 & Vulkan)** builds via Aurora + SDL3, with custom weathered app icon and macOS Game Mode support.
+- **Enhanced Rumble, Adaptive Triggers & PS5 DualSense USB Haptics**: dual-motor telemetry rumble (lasers, torpedoes, shield hits, explosions, boost), tactile GameCube trigger-click detents (or progressive throttle/airbrake resistance) on PS5 DualSense & Xbox impulse triggers, plus filtered 22–110 Hz DualSense USB voice-coil audio haptics with automatic speech-filtering & ducking compensation during Audio Commentary.
 - **Authentic Cinema Letterbox Framing**: cutscenes, intro, crawl, and credits keep their native cinema aspect ratio with top/bottom letterbox bars and no off-screen side pop-ins across all widescreen resolutions, while *Select Mission*, *Select Craft*, and front-end menus stay in clean unstretched widescreen.
 - **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar with locked timestamps, mouse support, and **native in-game font UI** for the pause menu.
 - **Redesigned Music Hall**: clean paginated track list for all 114 tracks with track durations and live elapsed/remaining playback timers.
@@ -32,7 +33,7 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively via
 - **Faster Boot & Cutscene Skip**: eliminated multi-second black-screen delays before the 3D intro with *Fast loading*, extended *Skip intro logos* to cover initial splash screens, and game-styled `HOLD TO SKIP` prompt.
 - **Smooth Cutscene & Credits Audio**: immediate safepoint AI/MusyX catch-up prevents choppy/stuttering music both with and without V-Sync (including on ProMotion displays).
 - **Automatic Memory Card Setup**: formats the virtual Memory Card and creates the initial save file on first launch without prompting.
-- **All upstream Red Two v1.3 features**: Hoth snow & Kothlis water texture fix, real-time console clock (Tatooine & Imperial Academy Heist day/night), async background disc reading with read-ahead, smooth stick response curve & per-stick settings, V-Sync, Discord Rich Presence, starter shader list, high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs with diagnostics, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
+- **All upstream Red Two v1.4 features**: freeze fix after *Strike at the Core* & attract demo, 16 MiB ARAM audio fix, Hoth snow & Kothlis water fixes, `GAME` tab & RetroAchievements browser login, Invert Y axis, real-time console clock (Tatooine & Imperial Academy Heist day/night), async background disc reading with read-ahead, smooth stick response curve & per-stick settings, V-Sync, Discord Rich Presence, starter shader list, high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs with diagnostics, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
 
 ### Feature Overview Video
 
