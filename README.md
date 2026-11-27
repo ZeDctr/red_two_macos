@@ -4,7 +4,9 @@
 
 # Red Two Plus
 
-An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.4** with additional UI, audio, haptic feedback, cinema framing, and quality-of-life enhancements.
+An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.4**.
+
+Many earlier Red Two Plus enhancements (such as Hold-B-to-Skip, the Video Player fixes, Switch button prompts, automatic Memory Card setup, Audio Commentary pause, front-end mouse navigation, and safepoint audio catch-up) have since been adopted into upstream Red Two v1.4. **Red Two Plus** builds on top of v1.4 with full next-gen controller haptics, front-end & cinema refinements, and prebuilt Apple Silicon macOS releases.
 
 The game's PowerPC code is translated to C++ ahead of time and runs natively via Aurora (Metal on macOS, Direct3D 12 / Vulkan on Windows) and SDL3. **No game data or texture packs are included**: you need your own disc image of the USA release (`GSWE64`, revision 0), for both the prebuilt downloads and your own build.
 
@@ -19,21 +21,21 @@ The game's PowerPC code is translated to C++ ahead of time and runs natively via
 3. Open `Red Two.app` and select your own USA disc image (`GSWE64` `.rvz`, `.iso`, `.gcm`, or `.wia`) in the launcher — Red Two remembers its path.
 4. Optional: copy a Dolphin HD texture pack (`GSWE64` folder) into `~/Library/Application Support/Red Two/textures/` or pick its folder under **F1 → MODS → Texture pack folder**.
 
-## Red Two Plus Enhancements (on top of Red Two v1.4)
+## What's Exclusive to Red Two Plus (on top of Red Two v1.4)
 
-- **Native Apple Silicon (ARM64 / Metal) & Experimental Windows (x64 / D3D12 & Vulkan)** builds via Aurora + SDL3, with custom weathered app icon and macOS Game Mode support.
-- **Enhanced Rumble, Adaptive Triggers & PS5 DualSense USB Haptics**: dual-motor telemetry rumble (lasers, torpedoes, shield hits, explosions, targeting computer deploy/stow, and boost), **emulated GameCube digital trigger click** on PS5 DualSense (official `0x25` Weapon mode for a crisp physical snap at ~80% travel before full boost/airbrake, or progressive resistance when trigger clicks are moved to LB/RB) plus Xbox impulse triggers, and filtered 22–110 Hz DualSense USB voice-coil audio haptics with automatic speech-filtering & ducking compensation during Audio Commentary.
-- **Authentic Cinema Letterbox Framing**: cutscenes, intro, crawl, and credits keep their native cinema aspect ratio with top/bottom letterbox bars and no off-screen side pop-ins across all widescreen resolutions, while *Select Mission*, *Select Craft*, and front-end menus stay in clean unstretched widescreen.
-- **Enhanced Video Player** (*Making Of* & *Teaser*): fixed high-FPS (90/120/144 Hz) playback speed, 4:3 aspect lock, ±5s seeking (`Left`/`Right`), auto-hiding progress bar with locked timestamps, mouse support, and **native in-game font UI** for the pause menu.
-- **Redesigned Music Hall**: clean paginated track list for all 114 tracks with track durations and live elapsed/remaining playback timers.
-- **Audio Commentary Controls & Overlay**: press **L3** or **C** to pause/resume active commentary streams during gameplay, with game-styled HUD typography.
+- **3-Tier Rumble & PS5 DualSense Haptics** (`F1 → CONTROLS → RUMBLE & HAPTICS`):
+  - **Enhanced Dual-Motor Rumble** (Xbox, Switch Pro, PlayStation & standard pads): live flight telemetry drives distinct feedback for laser fire, proton torpedoes/missiles/bombs, shield/hull damage, explosions, targeting computer deploy/stow (cockpit & chase view), and boost/airbrake.
+  - **Emulated GameCube Trigger Click (PS5 DualSense)**: uses Sony's official `0x25` Weapon trigger mode (USB & Bluetooth) to recreate a crisp physical **GameCube digital trigger click** at ~80% travel before full boost/airbrake (or progressive throttle/airbrake resistance when clicks are moved to LB/RB), plus Xbox impulse trigger feedback.
+  - **PS5 DualSense USB Audio Haptics**: routes 22–110 Hz filtered stereo game audio into the DualSense's left & right voice-coil actuators during flight — and automatically tightens to a 4-pole 75 Hz sub-bass filter while compensating for SFX/BGM ducking when Audio Commentary is speaking.
+- **Redesigned Music Hall**: paginated 114-track list with track durations, live elapsed/remaining timers, mouse support, and a glyph-locked progress bar.
 - **Art Gallery Captions**: native in-game font title and slide counter for all 27 concept art pieces and renders.
-- **Nintendo Switch Button Prompts & Select Craft C-Stick Fix**: adds dedicated **Nintendo Switch** (Pro Controller / Joy-Con) auto-detection and on-screen button prompts (`Switch`, alongside `Xbox`, `PlayStation`, and `GameCube`), plus fixes the previously unreplaced GameCube C-stick icon on the *Select Craft* screen with a clean generic Right Analog Stick icon.
-- **Streamlined Menu & Mouse Navigation**: *Special Features* and *Rogue Leaders* promoted directly into the Main Menu (*Start*, *Special Features*, *Rogue Leaders*, *Options* with *Passcodes*, *Quit*), with mouse hover/click support across front-end menus.
-- **Faster Boot & Cutscene Skip**: eliminated multi-second black-screen delays before the 3D intro with *Fast loading*, extended *Skip intro logos* to cover initial splash screens, and game-styled `HOLD TO SKIP` prompt.
-- **Smooth Cutscene & Credits Audio**: immediate safepoint AI/MusyX catch-up prevents choppy/stuttering music both with and without V-Sync (including on ProMotion displays).
-- **Automatic Memory Card Setup**: formats the virtual Memory Card and creates the initial save file on first launch without prompting.
-- **All upstream Red Two v1.4 features**: freeze fix after *Strike at the Core* & attract demo, 16 MiB ARAM audio fix, Hoth snow & Kothlis water fixes, `GAME` tab & RetroAchievements browser login, Invert Y axis, real-time console clock (Tatooine & Imperial Academy Heist day/night), async background disc reading with read-ahead, smooth stick response curve & per-stick settings, V-Sync, Discord Rich Presence, starter shader list, high internal resolutions (up to 4K), 4x MSAA, 16x anisotropic filtering, widescreen, MusyX audio DSP emulation, save states, Dolphin HD texture packs with diagnostics, Gecko/AR codes, cheats, passcode unlocks, and RetroAchievements.
+- **Streamlined Main Menu**: *Special Features* and *Rogue Leaders* promoted directly into the Main Menu (*Start*, *Special Features*, *Rogue Leaders*, *Options*, *Quit*).
+- **Cinema Letterbox Defaults & Fix**: *Cinematic bars* enabled by default, glyph-locked Video Player / Music Hall progress bars, and Aurora patch `0040` fixing vertically squished `2.10:1` in-mission flyby & turnaround cutscenes (submitted upstream as [PR #65](https://github.com/gminustwo/red_two/pull/65)).
+- **Prebuilt macOS `.app` Releases & Custom Icon**: ready-to-run Apple Silicon `.app` bundle (alongside an experimental Windows x64 zip) with a custom weathered app icon.
+
+### Inherited from Upstream Red Two v1.4
+
+Freeze fix after *Strike at the Core* & attract demo, 16 MiB ARAM audio fix, Hoth snow & Kothlis water fixes, `GAME` tab & RetroAchievements browser sign-in, Invert Y axis, real-time console clock, async background disc reading, Hold-B-to-Skip, Video Player fixes, Switch prompts, Audio Commentary pause (`L3` / `C`), front-end mouse navigation, safepoint audio catch-up, automatic Memory Card setup, high internal resolutions (up to 4K), 4x MSAA, 16x AF, widescreen, save states, Dolphin HD texture packs, Gecko/AR codes, cheats, and RetroAchievements.
 
 ### Feature Overview Video
 
