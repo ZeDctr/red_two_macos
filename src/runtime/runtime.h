@@ -226,6 +226,7 @@ struct CommentaryOverlay {
     double secs = 0.0;  // since a commentary line started
 };
 CommentaryOverlay commentaryOverlay();
+float commentaryDuckCompensation();  // hle_game.cpp: inverse of commentary SFX/BGM ducking (1.0..4.0)
 void commentaryToggle();  // hotkeys.cpp: pause / resume at the game's next frame
 u16 mouseMenuPadButtons();  // hle_game.cpp: port 1's buttons from the mouse in the game's menus (hw.cpp)
 
@@ -266,6 +267,8 @@ namespace input {
 void init(bool pads);  // pads: Aurora PAD (after the window exists); false = R2_INPUT script only
 void poll();  // once per frame: Aurora pads/keyboard -> SI controller state
 void rumble(int chan, u32 cmd);  // SI motor bits: 0 stop, 1 rumble, 2 hard stop
+void rumbleImpulse(float low, float high, float durationSec);  // enhanced rumble pulse (0..1)
+void setFlightTelemetry(bool flying, bool firingPrimary, float boostFrac, float brakeFrac);
 bool isPlayStation(int sdlGamepadType);  // an SDL_GamepadType of a PS3 / PS4 / PS5 controller
 bool port1PlayStation();  // port 1's controller is a PlayStation one (as of the last poll; button prompts)
 bool isNintendoSwitch(int sdlGamepadType);  // a Switch Pro Controller or Joy-Cons

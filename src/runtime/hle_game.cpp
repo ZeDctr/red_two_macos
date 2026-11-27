@@ -1360,7 +1360,37 @@ void hle_GameFrameDelta(Ctx& c) {
         else if (gameState == 3) phase = Phase::FrontEnd;
         else if (craft) phase = Phase::Flying;
         discord::gameFrame(phase);
+        const bool isFlying = (phase == discord::Phase::Flying) && inPlay && !s_skip;
         s_playerFlying.store(phase == Phase::Flying, std::memory_order_relaxed);
+        const bool firingA = isFlying && !gfx::menuOpen() && (pad.buttons & 0x0100u) != 0;
+        const float boostFrac = isFlying && !gfx::menuOpen()
+            ? ((pad.buttons & 0x0020u) ? 1.f : float(pad.triggerR) / 255.f) : 0.f;
+        const float brakeFrac = isFlying && !gfx::menuOpen()
+            ? ((pad.buttons & 0x0040u) ? 1.f : float(pad.triggerL) / 255.f) : 0.f;
+        input::setFlightTelemetry(isFlying, firingA, boostFrac, brakeFrac);
+
+        // Shield/hull damage detection for enhanced rumble
+        static u32 s_hapCraft = 0;
+        static float s_hapPrevHp = 0.f;
+        static bool s_hapFlyingBefore = false;
+        if (craft != s_hapCraft) {
+            s_hapCraft = craft;
+            s_hapPrevHp = 0.f;
+            s_hapFlyingBefore = false;
+        }
+        if (craft && isFlying) {
+            const float hp = float(s2d(rd32(craft + 0x6F4u)));
+            if (s_hapFlyingBefore && hp < s_hapPrevHp - 0.5f && hp >= 0.f && s_hapPrevHp <= 100000.f) {
+                const float dmg = s_hapPrevHp - hp;
+                const float low = std::clamp(dmg / 35.f, 0.35f, 1.0f);
+                const float high = std::clamp(dmg / 28.f, 0.45f, 1.0f);
+                input::rumbleImpulse(low, high, 0.20f);
+            }
+            s_hapPrevHp = hp;
+            s_hapFlyingBefore = true;
+        } else {
+            s_hapFlyingBefore = false;
+        }
     }
     // R2_DT_LOG: every 10 s, frames and the game time they advanced against the wall clock
     static const bool dtLog = envFlag("R2_DT_LOG");
@@ -2298,7 +2328,10 @@ void hle_MissionMedal(Ctx& c) {
 // a craft's explosion - whatever destroyed it, shots or a crash. The player's craft
 // (0x7FDEFE14) is spared.
 void hle_CraftDestroy(Ctx& c) {
-    if (settings::get().invincible && c.r[3] == rd32(0x7FDEFE14)) return;
+    if (c.r[3] == rd32(0x7FDEFE14)) {
+        if (settings::get().invincible) return;
+        input::rumbleImpulse(1.0f, 0.90f, 0.45f);
+    }
     f_7FC3E528_orig(c);
 }
 
@@ -2353,8 +2386,16 @@ static void keepAmmo() {
 // mission script) reads the count.
 void hle_WeaponUpdate(Ctx& c) {
     const u32 weapon = c.r[3], craft = c.r[4];
+    const bool isPlayer = craft && craft == playerCraft();
+    const s32 prevCount = isPlayer ? s32(rd32(weapon)) : 0;
     f_7FC39F24_orig(c);
-    if (!settings::get().infiniteAmmo || !craft || craft != playerCraft()) return;
+    if (!isPlayer) return;
+    const s32 newCount = s32(rd32(weapon));
+    if (prevCount > 0 && newCount < prevCount) {
+        // Secondary weapon fired (proton torpedo, concussion missile, bomb, cluster)
+        input::rumbleImpulse(0.75f, 0.55f, 0.16f);
+    }
+    if (!settings::get().infiniteAmmo) return;
     for (WeaponRec& w : s_weapons)
         if (w.weapon == weapon && w.craft == craft) {
             refill(w);
@@ -2942,6 +2983,7 @@ namespace {
 std::atomic<bool> s_commentaryToggle{false};
 std::atomic<u8> s_commentaryUi{0};  // 0 none, 1 playing, 2 paused
 std::atomic<u64> s_commentaryStartTb{0};
+std::atomic<float> s_commentaryDuckComp{1.f};
 struct PausedVoice {
     u32 stid = 0, frq = 0;
     u8 pan = 64;
@@ -2959,6 +3001,8 @@ CommentaryOverlay commentaryOverlay() {
     const u64 t0 = s_commentaryStartTb.load(std::memory_order_relaxed);
     return {st != 0, st == 2, t0 ? double(tbNow() - t0) / double(kTbClock) : 0.0};
 }
+
+float commentaryDuckCompensation() { return s_commentaryDuckComp.load(std::memory_order_relaxed); }
 
 static void commentaryUpdate(Ctx& c) {
     constexpr u32 kVoiceMgr = 0x7FE1C1D8u, kUnlockWord = 0x7FE1C4A0u + 0x658u, kMixer = 0x7FE19510u;
@@ -3041,6 +3085,14 @@ static void commentaryUpdate(Ctx& c) {
     const u8 st = s_commentaryPaused ? 2 : enabled && flag && playing ? 1 : 0;
     if (st != 0 && s_commentaryUi.load(std::memory_order_relaxed) == 0) s_commentaryStartTb.store(tbNow(), std::memory_order_relaxed);
     s_commentaryUi.store(st, std::memory_order_relaxed);
+    if (st == 1) {
+        const float d1 = float(s2d(rd32(kMixer + 0xD58u)));
+        const float d2 = float(s2d(rd32(kMixer + 0xD7Cu)));
+        const float duck = std::clamp(std::min(d1, d2), 0.20f, 1.0f);
+        s_commentaryDuckComp.store(std::clamp(1.0f / duck, 1.0f, 4.0f), std::memory_order_relaxed);
+    } else {
+        s_commentaryDuckComp.store(1.0f, std::memory_order_relaxed);
+    }
 }
 
 // ---- The mouse in the game's own menus ----------------------------------------------------------

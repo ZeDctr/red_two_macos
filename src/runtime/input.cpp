@@ -181,12 +181,181 @@ void scanTest() {
 PADStatus s_lastPads[PAD_CHANMAX] = {};  // what PADRead gave last (reused while a scan runs)
 u32 s_rumbleWant[PAD_CHANMAX] = {}, s_rumbleSent[PAD_CHANMAX] = {};
 
+namespace {
+struct RumbleImpulse {
+    float low = 0.f;
+    float high = 0.f;
+    u64 startTb = 0;
+    double durSec = 0.0;
+};
+std::mutex s_hapticMu;
+RumbleImpulse s_impulse;
+bool s_flightFlying = false;
+bool s_flightFiring = false;
+float s_flightBoost = 0.f;
+float s_flightBrake = 0.f;
+u64 s_lastLaserPulseTb = 0;
+
+SDL_Gamepad* portGamepad(int port) {
+    const auto src = aurora::pad::port_controller(port);
+    return src ? SDL_GetGamepadFromID(aurora::input::gamepad_for_source(src)) : nullptr;
+}
+
+void sendDualSenseTriggers(SDL_Gamepad* g, bool active, bool bumperClicks) {
+    static SDL_Gamepad* s_lastPad = nullptr;
+    static int s_lastMode = -1;  // -1 unknown, 0 off, 1 gc-click, 2 analog
+    const int wantMode = !active ? 0 : (bumperClicks ? 2 : 1);
+    if (g == s_lastPad && wantMode == s_lastMode) return;
+    s_lastPad = g;
+    s_lastMode = wantMode;
+    if (!g) return;
+
+    // DS5EffectsState_t (47 bytes): SDL_SendGamepadEffect prepends the USB/BT report header.
+    // EnableBits1 bits: 0x04 = right trigger effect, 0x08 = left trigger effect.
+    u8 pkt[47] = {};
+    pkt[0] = 0x04 | 0x08;
+    u8* rt = &pkt[10];
+    u8* lt = &pkt[21];
+    if (wantMode == 0) {
+        rt[0] = 0x05;  // Off / release resistance
+        lt[0] = 0x05;
+    } else if (wantMode == 1) {
+        // Section resistance: physical GameCube trigger-click detent before boost / airbrake
+        rt[0] = 0x02;
+        rt[1] = 0xBA;  // start ~73%
+        rt[2] = 0xE6;  // end   ~90%
+        rt[3] = 0xD0;  // crisp click force
+        lt[0] = 0x02;
+        lt[1] = 0xBA;
+        lt[2] = 0xE6;
+        lt[3] = 0xC0;
+    } else {
+        // Analog-only mode (clicks on LB/RB): smooth progressive throttle & airbrake resistance
+        rt[0] = 0x01;
+        rt[1] = 0x30;
+        rt[2] = 0x55;
+        lt[0] = 0x01;
+        lt[1] = 0x28;
+        lt[2] = 0x75;
+    }
+    SDL_SendGamepadEffect(g, pkt, sizeof pkt);
+}
+}  // namespace
+
 void applyRumble() {  // JoystickAccess held
-    for (u32 i = 0; i < PAD_CHANMAX; i++)
-        if (s_rumbleWant[i] != s_rumbleSent[i]) {
-            s_rumbleSent[i] = s_rumbleWant[i];
-            PADControlMotor(i, s_rumbleWant[i]);
+    const settings::Settings& st = settings::get();
+    if (st.rumbleMode == settings::RumbleMode::Off) {
+        for (u32 i = 0; i < PAD_CHANMAX; i++) {
+            if (s_rumbleSent[i] != 0) {
+                s_rumbleSent[i] = 0;
+                PADControlMotor(i, PAD_MOTOR_STOP);
+            }
         }
+        if (SDL_Gamepad* g = portGamepad(0)) {
+            SDL_RumbleGamepad(g, 0, 0, 0);
+            SDL_RumbleGamepadTriggers(g, 0, 0, 0);
+            if (SDL_GetGamepadType(g) == SDL_GAMEPAD_TYPE_PS5) sendDualSenseTriggers(g, false, false);
+        }
+        return;
+    }
+
+    if (st.rumbleMode == settings::RumbleMode::Original) {
+        for (u32 i = 0; i < PAD_CHANMAX; i++) {
+            if (s_rumbleWant[i] != s_rumbleSent[i]) {
+                s_rumbleSent[i] = s_rumbleWant[i];
+                PADControlMotor(i, s_rumbleWant[i]);
+            }
+        }
+    } else {
+        // Ports 1..3 keep standard 1-bit rumble
+        for (u32 i = 1; i < PAD_CHANMAX; i++) {
+            if (s_rumbleWant[i] != s_rumbleSent[i]) {
+                s_rumbleSent[i] = s_rumbleWant[i];
+                PADControlMotor(i, s_rumbleWant[i]);
+            }
+        }
+        // Port 0: dual-motor telemetry mixer
+        SDL_Gamepad* g = portGamepad(0);
+        const u64 now = tbNow();
+        float low = (s_rumbleWant[0] == PAD_MOTOR_RUMBLE) ? 0.85f : 0.f;
+        float high = (s_rumbleWant[0] == PAD_MOTOR_RUMBLE) ? 0.65f : 0.f;
+        bool flying = false, firing = false;
+        float boost = 0.f, brake = 0.f;
+        {
+            std::lock_guard lk(s_hapticMu);
+            flying = s_flightFlying;
+            firing = s_flightFiring;
+            boost = s_flightBoost;
+            brake = s_flightBrake;
+            if (s_impulse.startTb && s_impulse.durSec > 0.0) {
+                const double age = double(now - s_impulse.startTb) / double(kTbClock);
+                if (age < s_impulse.durSec) {
+                    const float env = float(1.0 - age / s_impulse.durSec);
+                    low = std::max(low, s_impulse.low * env);
+                    high = std::max(high, s_impulse.high * env);
+                } else {
+                    s_impulse.startTb = 0;
+                }
+            }
+            if (flying && firing && (now - s_lastLaserPulseTb) >= kTbClock / 8) {
+                s_lastLaserPulseTb = now;
+                s_impulse = {std::max(low, 0.16f), std::max(high, 0.42f), now, 0.065};
+                low = std::max(low, 0.16f);
+                high = std::max(high, 0.42f);
+            }
+        }
+        if (flying) {
+            if (boost > 0.45f) {
+                const float b = (boost - 0.45f) / 0.55f;
+                low = std::max(low, 0.10f + 0.18f * b);
+                high = std::max(high, 0.06f + 0.10f * b);
+            }
+            if (brake > 0.45f) {
+                const float b = (brake - 0.45f) / 0.55f;
+                high = std::max(high, 0.08f + 0.14f * b);
+            }
+        }
+        static u16 s_lastLow = 0, s_lastHigh = 0;
+        const u16 uLow = u16(std::clamp(low, 0.f, 1.f) * 65535.f);
+        const u16 uHigh = u16(std::clamp(high, 0.f, 1.f) * 65535.f);
+        if (g) {
+            if (uLow != s_lastLow || uHigh != s_lastHigh || uLow > 0 || uHigh > 0) {
+                SDL_RumbleGamepad(g, uLow, uHigh, (uLow || uHigh) ? 180 : 0);
+                s_lastLow = uLow;
+                s_lastHigh = uHigh;
+            }
+        } else if (s_rumbleWant[0] != s_rumbleSent[0]) {
+            s_rumbleSent[0] = s_rumbleWant[0];
+            PADControlMotor(0, s_rumbleWant[0]);
+        }
+    }
+
+    // Adaptive Triggers (PS5 DualSense) & Impulse Triggers (Xbox)
+    if (SDL_Gamepad* g = portGamepad(0)) {
+        const SDL_GamepadType type = SDL_GetGamepadType(g);
+        bool flying = false, firing = false;
+        float boost = 0.f, brake = 0.f;
+        {
+            std::lock_guard lk(s_hapticMu);
+            flying = s_flightFlying;
+            firing = s_flightFiring;
+            boost = s_flightBoost;
+            brake = s_flightBrake;
+        }
+        const bool trigOn = st.adaptiveTriggers && flying && !gfx::menuOpen();
+        if (type == SDL_GAMEPAD_TYPE_PS5) {
+            sendDualSenseTriggers(g, trigOn, st.bumperClicks);
+        } else if (type == SDL_GAMEPAD_TYPE_XBOX360 || type == SDL_GAMEPAD_TYPE_XBOXONE) {
+            const u16 lt = trigOn && brake > 0.3f ? u16(std::clamp(brake, 0.f, 1.f) * 22000.f) : 0;
+            const u16 rt = trigOn ? u16(std::clamp((boost > 0.3f ? boost * 0.35f : 0.f) + (firing ? 0.35f : 0.f), 0.f, 1.f) * 32000.f) : 0;
+            static u16 s_lastLt = 0, s_lastRt = 0;
+            if (lt != s_lastLt || rt != s_lastRt || lt > 0 || rt > 0) {
+                SDL_RumbleGamepadTriggers(g, lt, rt, (lt || rt) ? 140 : 0);
+                s_lastLt = lt;
+                s_lastRt = rt;
+            }
+        }
+    }
 }
 
 // Port 1 follows the controller in use: one on no port that has a button pressed (or a trigger
@@ -696,6 +865,32 @@ void rumble(int chan, u32 cmd) {
     if (!s_pads || chan < 0 || chan > 3) return;
     s_rumbleWant[chan] = cmd;
     if (JoystickAccess joy; joy) applyRumble();  // else at the next poll
+}
+
+void rumbleImpulse(float low, float high, float durationSec) {
+    if (settings::get().rumbleMode != settings::RumbleMode::Enhanced) return;
+    const u64 now = tbNow();
+    std::lock_guard lk(s_hapticMu);
+    float curLow = 0.f, curHigh = 0.f;
+    if (s_impulse.startTb && s_impulse.durSec > 0.0) {
+        const double age = double(now - s_impulse.startTb) / double(kTbClock);
+        if (age < s_impulse.durSec) {
+            const float env = float(1.0 - age / s_impulse.durSec);
+            curLow = s_impulse.low * env;
+            curHigh = s_impulse.high * env;
+        }
+    }
+    s_impulse = {std::max(curLow, std::clamp(low, 0.f, 1.f)),
+                 std::max(curHigh, std::clamp(high, 0.f, 1.f)),
+                 now, double(std::max(durationSec, 0.02f))};
+}
+
+void setFlightTelemetry(bool flying, bool firingPrimary, float boostFrac, float brakeFrac) {
+    std::lock_guard lk(s_hapticMu);
+    s_flightFlying = flying;
+    s_flightFiring = firingPrimary;
+    s_flightBoost = std::clamp(boostFrac, 0.f, 1.f);
+    s_flightBrake = std::clamp(brakeFrac, 0.f, 1.f);
 }
 
 namespace {

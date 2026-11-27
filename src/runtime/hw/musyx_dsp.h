@@ -32,6 +32,8 @@ void setSpeakers(int speakers);
 int outputChannels();  // what the output plays (or would, with no device): 2, 6 or 8
 void deviceEvent(const void* sdlEvent);  // every SDL event: playback devices come and go
 std::string perfText();                 // what was played since the last call (perf lines)
+void setDualSenseHaptics(bool on);      // open/close DualSense USB 4-ch audio haptic stream
+std::string dualSenseHapticsDevice();   // active DualSense USB haptic device name, or empty
 }  // namespace audio
 
 }  // namespace rt

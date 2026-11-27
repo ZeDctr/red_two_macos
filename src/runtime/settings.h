@@ -32,6 +32,10 @@ enum class ButtonPrompts : int { Auto = 0, Xbox, PlayStation, Switch, GameCube, 
 // stick_curve=smooth|linear|gamecube
 enum class StickCurve : int { Smooth = 0, Linear, GameCube, Count };
 
+// Rumble feedback (input.cpp): Off, Original (GameCube 1-bit motor only), or Enhanced
+// (dual-motor mixer driven by live gameplay telemetry: lasers, torpedoes, hits, explosions, boost).
+enum class RumbleMode : int { Off = 0, Original, Enhanced, Count };
+
 // Sound output (audio.cpp): Auto follows the default device's channels (the system's speaker
 // setup); 5.1 / 7.1 play the game's Pro Logic II surround on speakers of their own, stereo plays
 // it matrix-encoded (a receiver's Pro Logic II decoder unfolds it). settings.ini:
@@ -126,6 +130,9 @@ struct Settings {
     // RB to the right stick click (input.cpp placeClicks: the controllers' bindings)
     bool bumperClicks = false;
     bool invertY = false;  // in flight: stick up climbs (issue #59)
+    RumbleMode rumbleMode = RumbleMode::Enhanced;
+    bool adaptiveTriggers = true;       // DualSense adaptive triggers & Xbox trigger rumble in flight
+    bool dualsenseAudioHaptics = true;  // DualSense USB 4-channel voice-coil audio haptics (ch 3/4)
     int stickSensitivity = 100;  // 25..200
     StickCurve stickCurve = StickCurve::GameCube;  // the game's own response (the user's call, 2026-11-25)
     // Gyro aiming (gyro.cpp): turning and tilting the controller (the Steam Deck itself, a
@@ -162,6 +169,7 @@ const char* buttonPromptsName(ButtonPrompts p);  // as settings.ini writes it
 const char* gyroModeName(GyroMode m);
 const char* speakersName(Speakers s);  // as settings.ini writes it
 const char* stickCurveName(StickCurve c);  // as settings.ini writes it
+const char* rumbleModeName(RumbleMode m);
 inline constexpr int kGyroSpeedMin = 10, kGyroSpeedMax = 400;
 float resolutionScale(Resolution r);  // Aurora frame buffer scale; 0 = the window's own size
 float aspectValue(Aspect a);          // width / height (4:3 = the game's own); -1 = the window's

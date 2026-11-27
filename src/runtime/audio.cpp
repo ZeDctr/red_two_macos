@@ -29,9 +29,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <vector>
 
 #include "hw/musyx_dsp.h"
@@ -67,6 +69,126 @@ std::atomic<int> s_perfPeak{0};
 std::atomic<u64> s_perfQueueSum{0}, s_perfQueueCount{0};
 std::atomic<int> s_perfQueueMin{1 << 30}, s_perfQueueMax{0};
 int s_deviceFrames = 0, s_deviceRate = 0;  // the device's buffer (SDL's sample frames)
+
+// --- DualSense USB 4-channel audio haptics (channels 2 & 3 = L/R voice coils) ----------------
+std::mutex s_hapticMu;
+SDL_AudioStream* s_hapticStream = nullptr;
+SDL_AudioDeviceID s_hapticDevId = 0;
+std::string s_hapticDevName;
+u32 s_hapticRate = 32000;
+bool s_hapticEnabled = true;
+
+// 1-pole high-pass (~22 Hz) + up to 4-pole low-pass per stereo channel to isolate engines,
+// explosions, impacts & blaster bass while filtering out dialogue/commentary voices.
+struct HapticFilter {
+    float hpPrevIn = 0.f, hpPrevOut = 0.f;
+    float lp1 = 0.f, lp2 = 0.f, lp3 = 0.f, lp4 = 0.f;
+    float process(float x, float hpAlpha, float lpAlpha, bool fourPole) {
+        const float hp = hpAlpha * (hpPrevOut + x - hpPrevIn);
+        hpPrevIn = x;
+        hpPrevOut = hp;
+        lp1 += lpAlpha * (hp - lp1);
+        lp2 += lpAlpha * (lp1 - lp2);
+        if (!fourPole) return lp2;
+        lp3 += lpAlpha * (lp2 - lp3);
+        lp4 += lpAlpha * (lp3 - lp4);
+        return lp4;
+    }
+    void reset() { hpPrevIn = hpPrevOut = lp1 = lp2 = lp3 = lp4 = 0.f; }
+} s_hapticFilt[2];
+
+bool isDualSenseName(const char* name) {
+    if (!name) return false;
+    std::string lo;
+    for (const char* p = name; *p; ++p) lo.push_back(char(std::tolower(static_cast<unsigned char>(*p))));
+    return lo.find("dualsense") != std::string::npos;
+}
+
+void closeHapticLocked() {
+    if (s_hapticStream) {
+        SDL_DestroyAudioStream(s_hapticStream);
+        s_hapticStream = nullptr;
+    }
+    s_hapticDevId = 0;
+    s_hapticDevName.clear();
+    s_hapticFilt[0].reset();
+    s_hapticFilt[1].reset();
+}
+
+void probeDualSenseHapticsLocked() {
+    if (!s_sdlAudio || !s_hapticEnabled || s_hapticStream) return;
+    int count = 0;
+    SDL_AudioDeviceID* devs = SDL_GetAudioPlaybackDevices(&count);
+    if (!devs) return;
+    for (int i = 0; i < count; i++) {
+        const char* name = SDL_GetAudioDeviceName(devs[i]);
+        if (!isDualSenseName(name)) continue;
+        SDL_AudioSpec devSpec{};
+        if (!SDL_GetAudioDeviceFormat(devs[i], &devSpec, nullptr) || devSpec.channels < 4) continue;
+        const SDL_AudioSpec srcSpec{SDL_AUDIO_S16, 4, int(s_rate ? s_rate : 32000)};
+        SDL_AudioStream* st = SDL_OpenAudioDeviceStream(devs[i], &srcSpec, nullptr, nullptr);
+        if (!st) continue;
+        SDL_ResumeAudioStreamDevice(st);
+        s_hapticStream = st;
+        s_hapticDevId = devs[i];
+        s_hapticDevName = name ? name : "DualSense";
+        s_hapticRate = s_rate ? s_rate : 32000;
+        s_hapticFilt[0].reset();
+        s_hapticFilt[1].reset();
+        logf("audio", "DualSense USB audio haptics enabled on '%s' (%d ch @ %d Hz)",
+             s_hapticDevName.c_str(), devSpec.channels, devSpec.freq);
+        break;
+    }
+    SDL_free(devs);
+}
+
+void pushDualSenseHaptics(const u8* data, u32 frames, u32 rate) {
+    std::lock_guard lk(s_hapticMu);
+    if (!s_hapticStream || !s_hapticEnabled) return;
+    if (!playerFlying() || gfx::menuOpen() || cinematicSkip() || s_gain <= 0.01f) {
+        if (SDL_GetAudioStreamQueued(s_hapticStream) > 0) SDL_ClearAudioStream(s_hapticStream);
+        s_hapticFilt[0].reset();
+        s_hapticFilt[1].reset();
+        return;
+    }
+    if (rate != s_hapticRate) {
+        const SDL_AudioSpec spec{SDL_AUDIO_S16, 4, int(rate)};
+        SDL_SetAudioStreamFormat(s_hapticStream, &spec, nullptr);
+        s_hapticRate = rate;
+    }
+    const double bytesPerMs = double(rate) * 2.0 * 4.0 / 1000.0;
+    if (SDL_GetAudioStreamQueued(s_hapticStream) / bytesPerMs > 60.0) return;
+
+    const CommentaryOverlay co = commentaryOverlay();
+    const bool commentarySpeaking = co.active && !co.paused;
+    // During commentary: tighten to a steep 4-pole 75 Hz sub-bass filter (keeps speech out)
+    // and compensate for the game's SFX/BGM ducking so engines & explosions stay full strength.
+    const float lpCutoff = commentarySpeaking ? 75.f : 110.f;
+    const float duckComp = commentarySpeaking ? commentaryDuckCompensation() : 1.0f;
+    const float dt = 1.f / float(std::max(rate, 8000u));
+    const float hpRc = 1.f / (2.f * 3.14159265f * 22.f);
+    const float hpAlpha = hpRc / (hpRc + dt);
+    const float lpRc = 1.f / (2.f * 3.14159265f * lpCutoff);
+    const float lpAlpha = dt / (lpRc + dt);
+    const float gain = 1.85f * s_gain * duckComp;
+
+    static std::vector<s16> hbuf;
+    hbuf.resize(size_t(frames) * 4u);
+    for (u32 i = 0; i < frames; i++) {
+        const float inL = float(s16(data[4 * i] << 8 | data[4 * i + 1])) / 32768.f;
+        const float inR = float(s16(data[4 * i + 2] << 8 | data[4 * i + 3])) / 32768.f;
+        float outL = s_hapticFilt[0].process(inL, hpAlpha, lpAlpha, commentarySpeaking) * gain;
+        float outR = s_hapticFilt[1].process(inR, hpAlpha, lpAlpha, commentarySpeaking) * gain;
+        // Soft noise gate so quiet ambience doesn't create a constant hum
+        if (std::fabs(outL) < 0.035f) outL = 0.f;
+        if (std::fabs(outR) < 0.035f) outR = 0.f;
+        hbuf[4 * i + 0] = 0;  // speaker / headphone L: silent
+        hbuf[4 * i + 1] = 0;  // speaker / headphone R: silent
+        hbuf[4 * i + 2] = s16(std::clamp(outL, -1.f, 1.f) * 32767.f);
+        hbuf[4 * i + 3] = s16(std::clamp(outR, -1.f, 1.f) * 32767.f);
+    }
+    SDL_PutAudioStreamData(s_hapticStream, hbuf.data(), int(hbuf.size() * 2u));
+}
 
 void writeWavHeader() {
     auto u32le = [](u8* p, u32 v) { p[0] = u8(v); p[1] = u8(v >> 8); p[2] = u8(v >> 16); p[3] = u8(v >> 24); };
@@ -204,6 +326,23 @@ void init() {
     s_sdlAudio = true;
     s_rate = 32000;
     openStream();
+    {
+        std::lock_guard lk(s_hapticMu);
+        s_hapticEnabled = settings::get().dualsenseAudioHaptics;
+        probeDualSenseHapticsLocked();
+    }
+}
+
+void setDualSenseHaptics(bool on) {
+    std::lock_guard lk(s_hapticMu);
+    s_hapticEnabled = on;
+    if (!on) closeHapticLocked();
+    else probeDualSenseHapticsLocked();
+}
+
+std::string dualSenseHapticsDevice() {
+    std::lock_guard lk(s_hapticMu);
+    return s_hapticDevName;
 }
 
 void setSpeakers(int speakers) {
@@ -231,6 +370,15 @@ void deviceEvent(const void* p) {
     // no output so far (there was no device), and now there is one
     static const bool none = envFlag("R2_NO_AUDIO");
     if (!s_stream && !none && s_rate && e.type == SDL_EVENT_AUDIO_DEVICE_ADDED) openStream();
+    {
+        std::lock_guard lk(s_hapticMu);
+        if (s_hapticStream && e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED && e.adevice.which == s_hapticDevId) {
+            logf("audio", "DualSense USB audio haptics device removed");
+            closeHapticLocked();
+        } else if (!s_hapticStream && s_hapticEnabled && !none && e.type == SDL_EVENT_AUDIO_DEVICE_ADDED) {
+            probeDualSenseHapticsLocked();
+        }
+    }
 }
 
 std::string perfText() {
@@ -295,6 +443,7 @@ void push(const u8* data, u32 frames, u32 rate) {
         writeWavHeader();
     }
     if (!s_stream) return;
+    pushDualSenseHaptics(data, frames, rate);
     compose(data, frames, s_channels, discrete, buf);
     const int bytes = int(buf.size() * 2);
     if (rate != s_rate) {
@@ -371,6 +520,10 @@ void push(const u8* data, u32 frames, u32 rate) {
 
 // a state was loaded: what is queued belongs to the other timeline
 void flush() {
+    {
+        std::lock_guard lk(s_hapticMu);
+        if (s_hapticStream) SDL_ClearAudioStream(s_hapticStream);
+    }
     if (!s_stream) return;
     SDL_ClearAudioStream(s_stream);
     stopPlaying();

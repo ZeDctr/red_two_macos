@@ -2320,6 +2320,26 @@ void pageControls() {
                   "Dolphin), and roll moves to the right stick click. Changes the controller's bindings below."))
         s_changed = true;
     triggerMeter();
+    heading("RUMBLE & HAPTICS");
+    {
+        settings::Settings& st = settings::get();
+        if (enumRow("Rumble", st.rumbleMode, settings::rumbleModeName,
+                    "Enhanced drives both controller motors from live flight telemetry (laser fire, torpedoes, "
+                    "shield hits, explosions, and boost). Original uses only the GameCube's sparse 1-bit rumble."))
+            s_changed = true;
+        if (toggleRow("Adaptive triggers", st.adaptiveTriggers,
+                      "PS5 DualSense: adds a tactile GameCube trigger-click detent (or progressive throttle/airbrake "
+                      "resistance when clicks are on LB/RB) in flight. Xbox: subtle impulse trigger feedback."))
+            s_changed = true;
+        const std::string dsDev = audio::dualSenseHapticsDevice();
+        std::string dsHelp = "PS5 DualSense (USB only): routes low-pass filtered stereo game audio (engines, "
+                             "explosions, flybys) directly into the controller's left & right voice-coil actuators. ";
+        dsHelp += dsDev.empty() ? "No 4-channel DualSense USB audio device detected." : ("Active: " + dsDev + ".");
+        if (toggleRow("DualSense USB haptics", st.dualsenseAudioHaptics, dsHelp.c_str())) {
+            s_changed = true;
+            audio::setDualSenseHaptics(st.dualsenseAudioHaptics);
+        }
+    }
     heading("ON-SCREEN BUTTONS");
     {
         settings::Settings& st = settings::get();
