@@ -1161,6 +1161,7 @@ static bool moviePaused();
 static void commentaryUpdate(Ctx& c);
 static void artGalleryUpdate(Ctx& c);
 static void mouseMenuUpdate(Ctx& c);
+static std::atomic<u64> s_targetingFrameTb{0};
 
 void hle_GameFrameDelta(Ctx& c) {
     frameDelta(c);
@@ -1369,14 +1370,16 @@ void hle_GameFrameDelta(Ctx& c) {
             ? ((pad.buttons & 0x0040u) ? 1.f : float(pad.triggerL) / 255.f) : 0.f;
         input::setFlightTelemetry(isFlying, firingA, boostFrac, brakeFrac);
 
-        // Shield/hull damage detection for enhanced rumble
+        // Shield/hull damage & targeting computer deploy/stow detection for enhanced rumble
         static u32 s_hapCraft = 0;
         static float s_hapPrevHp = 0.f;
         static bool s_hapFlyingBefore = false;
+        static bool s_hapPrevTargeting = false;
         if (craft != s_hapCraft) {
             s_hapCraft = craft;
             s_hapPrevHp = 0.f;
             s_hapFlyingBefore = false;
+            s_hapPrevTargeting = false;
         }
         if (craft && isFlying) {
             const float hp = float(s2d(rd32(craft + 0x6F4u)));
@@ -1387,9 +1390,17 @@ void hle_GameFrameDelta(Ctx& c) {
                 input::rumbleImpulse(low, high, 0.20f);
             }
             s_hapPrevHp = hp;
+            const u64 tTb = s_targetingFrameTb.load(std::memory_order_relaxed);
+            const bool targetingOpen = tTb != 0 && (tb - tTb) < (kTbClock / 20);
+            if (s_hapFlyingBefore && targetingOpen != s_hapPrevTargeting) {
+                if (targetingOpen) input::rumbleImpulse(0.28f, 0.68f, 0.14f);  // Zielvisier ausgeklappt
+                else input::rumbleImpulse(0.38f, 0.45f, 0.10f);                // Zielvisier eingeklappt
+            }
+            s_hapPrevTargeting = targetingOpen;
             s_hapFlyingBefore = true;
         } else {
             s_hapFlyingBefore = false;
+            s_hapPrevTargeting = false;
         }
     }
     // R2_DT_LOG: every 10 s, frames and the game time they advanced against the wall clock
@@ -2069,6 +2080,7 @@ void hle_TargetingPass(Ctx& c) {
         logged = true;
         logf("wide", "targeting computer screen drawn in screen space");
     }
+    s_targetingFrameTb.store(tbNow(), std::memory_order_relaxed);
     gatherBp(0x7E5C5201);
     f_7FCD7D28_orig(c);
     gatherBp(0x7E5C5200);

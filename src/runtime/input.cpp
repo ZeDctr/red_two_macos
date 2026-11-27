@@ -220,15 +220,17 @@ void sendDualSenseTriggers(SDL_Gamepad* g, bool active, bool bumperClicks) {
         rt[0] = 0x05;  // Off / release resistance
         lt[0] = 0x05;
     } else if (wantMode == 1) {
-        // Section resistance: physical GameCube trigger-click detent before boost / airbrake
-        rt[0] = 0x02;
-        rt[1] = 0xBA;  // start ~73%
-        rt[2] = 0xE6;  // end   ~90%
-        rt[3] = 0xD0;  // crisp click force
-        lt[0] = 0x02;
-        lt[1] = 0xBA;
-        lt[2] = 0xE6;
-        lt[3] = 0xC0;
+        // Official DualSense Weapon mode (0x25): zone 7->8 (~75-85% travel) at max strength (7),
+        // creating a crisp mechanical GameCube trigger-click snap that releases past 85%.
+        constexpr u16 zones = (1u << 7) | (1u << 8);
+        rt[0] = 0x25;
+        rt[1] = u8(zones & 0xFFu);
+        rt[2] = u8((zones >> 8) & 0xFFu);
+        rt[3] = 0x07;
+        lt[0] = 0x25;
+        lt[1] = u8(zones & 0xFFu);
+        lt[2] = u8((zones >> 8) & 0xFFu);
+        lt[3] = 0x07;
     } else {
         // Analog-only mode (clicks on LB/RB): smooth progressive throttle & airbrake resistance
         rt[0] = 0x01;
