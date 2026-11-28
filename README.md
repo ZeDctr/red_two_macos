@@ -6,7 +6,7 @@
 
 An enhanced **macOS (Apple Silicon / Metal)** and **Windows (x64, experimental)** edition of **Red Two**, a static recompilation of **Star Wars: Rogue Squadron II – Rogue Leader** (GameCube), built on [gminustwo/red_two](https://github.com/gminustwo/red_two) **v1.4**.
 
-Many earlier Red Two Plus enhancements (such as Hold-B-to-Skip, the Video Player fixes, Switch button prompts, automatic Memory Card setup, Audio Commentary pause, front-end mouse navigation, and safepoint audio catch-up) have since been adopted into upstream Red Two v1.4. **Red Two Plus** builds on top of v1.4 with full next-gen controller haptics, front-end & cinema refinements, and prebuilt Apple Silicon macOS releases.
+Earlier Red Two Plus enhancements (such as Hold-B-to-Skip, the Video Player fixes, Switch button prompts, automatic Memory Card setup, Audio Commentary pause, front-end mouse navigation, and safepoint audio catch-up) have since been adopted into upstream Red Two v1.4. **Red Two Plus** builds on top of v1.4 with full next-gen controller haptics, front-end & cinema refinements, and prebuilt Apple Silicon macOS releases.
 
 The game's PowerPC code is translated to C++ ahead of time and runs natively via Aurora (Metal on macOS, Direct3D 12 / Vulkan on Windows) and SDL3. **No game data or texture packs are included**: you need your own disc image of the USA release (`GSWE64`, revision 0), for both the prebuilt downloads and your own build.
 
